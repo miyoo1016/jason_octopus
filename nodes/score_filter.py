@@ -42,7 +42,14 @@ class ScoreFilterNode(BaseNode):
             
             f_flow = float(row.get("flow_score", 0)) if not pd.isna(row.get("flow_score", 0)) else 0.0
             i_flow = float(row.get("institution_flow_score", 0)) if not pd.isna(row.get("institution_flow_score", 0)) else 0.0
-            flow = min(30.0, f_flow + i_flow) # 외국인/기관 수급 합산 (최대 30점)
+            
+            # [개선] 수급 질적 필터링 (퍼플렉시티 제안: 역방향 수급 패널티)
+            # 외인/기관 둘 다 양수일 때만 고득점(15점 초과) 허용
+            if f_flow > 0 and i_flow > 0:
+                flow = min(30.0, f_flow + i_flow)
+            else:
+                # 어느 한쪽이 팔고 있거나 수급이 없으면 최대 15점으로 제한
+                flow = min(15.0, f_flow + i_flow)
             
             # [추가] 섹터 강세 보너스 (+5점)
             sector_bonus = 0
