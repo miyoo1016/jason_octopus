@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AlphaForge — DAG 퀀트 엔진</title>
+  <link rel="stylesheet" href="/static/dag-editor.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <!-- ══ TOP BAR ══ -->
+  <header id="topbar">
+    <div class="topbar-left">
+      <div class="logo"><span class="logo-icon">A</span> AlphaForge</div>
+      <span class="version">v1.0.0</span>
+      <div class="pipeline-name" id="pipelineName" contenteditable="true">KR VCP × 외국인 → LLM → Telegram</div>
+      <span class="pipeline-config">30 14 × × 1-5 ★</span>
+    </div>
+    <div class="topbar-right">
+      <div class="view-toggle">
+        <button class="toggle-btn" onclick="window.location.href='/'">📋 전략빌더</button>
+        <button class="toggle-btn active">🔗 DAG</button>
+      </div>
+      <div class="view-toggle">
+        <button class="toggle-btn active" id="btnBackend">Backend</button>
+        <button class="toggle-btn" id="btnBrowser">Browser</button>
+      </div>
+      <button class="tb-btn" id="btnNew" title="New">✦ New</button>
+      <button class="tb-btn" id="btnLoad" title="Load">📂 Load</button>
+      <button class="tb-btn" id="btnSave" title="Save">💾 Save</button>
+      <button class="tb-btn" id="btnHelp" title="Help">?</button>
+      <button class="btn-start" id="btnStart">▶ Start</button>
+    </div>
+  </header>
+
+  <!-- ══ MAIN LAYOUT ══ -->
+  <div id="app">
+
+    <!-- ── LEFT SIDEBAR: 도구함 ── -->
+    <aside id="sidebar-left" class="sidebar">
+      <div class="sidebar-header">
+        <h2>도구함</h2>
+        <span class="tool-count" id="toolCount">12개</span>
+      </div>
+      <div class="search-box">
+        <input type="text" id="toolSearch" placeholder="찾기...">
+      </div>
+      <div class="tool-list" id="toolList">
+        <!-- JS에서 동적 생성 -->
+      </div>
+    </aside>
+
+    <!-- ── CENTER CANVAS ── -->
+    <main id="canvas-area">
+      <div class="canvas-controls">
+        <button class="canvas-ctrl-btn" id="zoomOut">−</button>
+        <span class="zoom-level" id="zoomLevel">100%</span>
+        <button class="canvas-ctrl-btn" id="zoomIn">+</button>
+        <button class="canvas-ctrl-btn" id="zoomFit">⛶</button>
+      </div>
+      <div id="canvas" class="canvas">
+        <svg id="edgeSvg" class="edge-layer"></svg>
+        <div id="nodeLayer" class="node-layer"></div>
+      </div>
+    </main>
+
+    <!-- ── RIGHT SIDEBAR: 노드 설정 ── -->
+    <aside id="sidebar-right" class="sidebar">
+      <div class="sidebar-header">
+        <h2 id="selectedNodeTitle">노드를 선택하세요</h2>
+        <button class="close-btn" id="closeRight">×</button>
+      </div>
+      <div id="selectedNodeMeta" class="node-meta-bar" style="display:none;">
+        <span class="node-type-badge" id="selectedNodeType"></span>
+        <span class="node-status-dot" id="selectedNodeStatus">● idle</span>
+        <button class="pin-btn" title="Pin">📌 Pin</button>
+      </div>
+
+      <div id="suggestedNodes" class="suggested-section" style="display:none;">
+        <div class="suggested-label">▸ 다음 추천 노드 <span class="suggest-more">+1개 더 보기</span></div>
+        <div class="suggested-tags" id="suggestedTags"></div>
+      </div>
+
+      <div class="right-tabs">
+        <button class="tab-btn active" data-tab="params">Params</button>
+        <button class="tab-btn" data-tab="result">Result</button>
+        <button class="tab-btn" data-tab="yaml">YAML</button>
+      </div>
+
+      <div id="tabParams" class="tab-content active">
+        <div id="paramsForm" class="params-form">
+          <p class="empty-msg">노드 선택 필요</p>
+        </div>
+      </div>
+      <div id="tabResult" class="tab-content">
+        <div id="resultView" class="result-view">
+          <p class="empty-msg">실행 결과 없음</p>
+        </div>
+      </div>
+      <div id="tabYaml" class="tab-content">
+        <pre id="yamlView" class="yaml-view">노드 선택 필요</pre>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- ══ BOTTOM STATUS BAR ══ -->
+  <footer id="statusbar">
+    <div class="status-left">
+      <span class="run-id" id="runId">대기 중</span>
+      <div class="progress-bar-wrap">
+        <span class="progress-label" id="progressLabel">Progress 0/0</span>
+        <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+      </div>
+    </div>
+    <div class="status-right">
+      <span class="stat-item">Latency <strong id="statLatency">—</strong></span>
+      <span class="stat-item">Cost <strong id="statCost">$0.0000</strong></span>
+      <span class="stat-item">Tokens <strong id="statTokens">0T 0</strong></span>
+      <span class="stat-item next-run" id="nextRun">Next 월 14:30 KST</span>
+      <span class="stat-item backend-url">backend.alphaforge.dev</span>
+    </div>
+  </footer>
+
+  <script src="/static/dag-editor.js"></script>
+</body>
+</html>

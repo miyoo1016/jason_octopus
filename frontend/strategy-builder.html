@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AlphaForge — 종목 스크리닝 전략 빌더</title>
+  <meta name="description" content="실시간 KRX 데이터 기반 퀀트 종목 스크리닝 전략 빌더">
+  <link rel="stylesheet" href="/static/strategy-builder.css">
+</head>
+<body>
+  <!-- TOPBAR -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="logo">
+        <div class="logo-icon">🐙</div>
+        <div class="logo-text">Alpha<span>Forge</span></div>
+      </div>
+      <div class="mode-switch">
+        <button class="mode-btn active" id="modeSimple">📋 전략 빌더</button>
+        <button class="mode-btn" id="modeDag">🔗 DAG 에디터</button>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button class="btn-run" id="btnRun">▶ 분석 실행</button>
+    </div>
+  </header>
+
+  <!-- MAIN -->
+  <main class="main">
+    <!-- LEFT: Strategy Config -->
+    <section class="strategy-panel">
+
+      <!-- 시장 선택 -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="icon">📌</span> 시장 선택</div>
+        </div>
+        <div class="card-body">
+          <div class="market-group">
+            <button class="market-chip active" data-market="ALL">전체</button>
+            <button class="market-chip" data-market="KOSPI">KOSPI</button>
+            <button class="market-chip" data-market="KOSDAQ">KOSDAQ</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 시그널 선택 -->
+      <div class="card">
+        <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+          <div class="card-title"><span class="icon">🔍</span> 시그널 & 필터</div>
+          <button id="btnSelectAllSignals" class="btn-sm" style="background: none; border: 1px solid var(--border); color: var(--text-2); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">전체 선택</button>
+        </div>
+        <div class="card-body" id="signalList"></div>
+      </div>
+
+      <!-- 결합 방식 -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="icon">🔗</span> 결합 방식</div>
+        </div>
+        <div class="card-body">
+          <div class="combine-row">
+            <button class="combine-btn active" data-combine="and">∩ AND — 모두 만족</button>
+            <button class="combine-btn" data-combine="or">∪ OR — 하나라도</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 정렬 & 개수 -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="icon">📊</span> 정렬 & Top N</div>
+        </div>
+        <div class="card-body">
+          <div class="sort-row">
+            <select id="sortColumn">
+              <option value="market_cap" selected>시가총액</option>
+              <option value="close">종가</option>
+              <option value="volume">거래량</option>
+            </select>
+            <span class="sort-label">상위</span>
+            <input type="number" id="topN" value="50" min="1" max="500">
+            <span class="sort-label">개</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI 분석 설정 -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="icon">🤖</span> AI 분석 설정</div>
+          <span class="ai-badge disconnected" id="aiStatus">미설정</span>
+        </div>
+        <div class="card-body">
+          <div class="ai-provider-row">
+            <button class="provider-btn active" data-provider="gemini">Gemini Flash</button>
+            <button class="provider-btn" data-provider="claude">Claude Haiku</button>
+          </div>
+          <div class="ai-key-wrap">
+            <input type="password" id="aiApiKey" placeholder="API 키를 입력하세요..." autocomplete="off">
+            <button class="btn-save-key" id="btnSaveKey">저장</button>
+          </div>
+          <div class="ai-hint" id="aiHint">Google AI Studio에서 무료 Gemini API 키를 발급받으세요. 하루 20회 무료 (10종목 배치 → ~3회 사용).</div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- RIGHT: Results -->
+    <section class="results-panel">
+
+      <!-- 전략 해설 카드 (분석 후 표시) -->
+      <div class="insight-card" id="insightCard" style="display:none"></div>
+
+      <!-- Stats -->
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-value" id="statTotal">—</div>
+          <div class="stat-label">전체 종목</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-value" id="statFiltered">—</div>
+          <div class="stat-label">통과 종목</div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-value" id="statRate">—</div>
+          <div class="stat-label">필터링률</div>
+        </div>
+        <div class="stat-card purple">
+          <div class="stat-value" id="statLatency">—</div>
+          <div class="stat-label">처리 시간</div>
+        </div>
+      </div>
+
+      <!-- Table -->
+      <div class="results-table-wrap">
+        <div class="results-toolbar">
+          <div class="results-title">
+            📋 스크리닝 결과
+            <span class="results-count" id="resultCount">0개</span>
+          </div>
+          <div class="results-actions">
+            <button class="tb-btn" id="btnCopyAll" onclick="copyAll()">📋 전체 복사</button>
+            <button class="tb-btn" onclick="exportCSV()">📥 CSV 다운로드</button>
+          </div>
+        </div>
+        <div class="results-scroll">
+          <div class="results-cards" id="resultBody">
+            <div class="empty-state">
+              <div class="empty-icon">🐙</div>
+              <div class="empty-title">시그널을 선택하고 분석을 실행하세요</div>
+              <div class="empty-desc">왼쪽에서 원하는 필터를 체크하고 ▶ 분석 실행 버튼을 누르세요</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Loading Overlay -->
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="spinner"></div>
+    <div class="loading-text">KRX 데이터 분석 중...</div>
+  </div>
+
+  <script src="/static/strategy-builder.js"></script>
+  <script>
+    function copyAll() {
+      if (!state.results) return alert('먼저 분석을 실행하세요.');
+      const nr = state.results.node_results;
+      const nodeIds = Object.keys(nr);
+      const last = nr[nodeIds[nodeIds.length - 1]];
+      if (!last || !last.data?.length) return alert('복사할 데이터가 없습니다.');
+
+      const enabled = Array.from(state.enabledSignals);
+
+      // ── 전략 맥락 헤더 ──
+      const today = new Date().toISOString().slice(0, 10);
+      const signalDescs = enabled.map(sigId => {
+        const sig = SIGNALS.find(s => s.id === sigId);
+        const meta = SIGNAL_META[sigId];
+        if (!sig) return sigId;
+        const params = sig.params.map(p => {
+          const val = state.signalParams[sigId]?.[p.key] ?? p.default;
+          return `${p.label}=${val}`;
+        }).join(', ');
+        return `${sig.name}${params ? ' (' + params + ')' : ''}`;
+      });
+
+      const univNode = Object.values(nr).find(n => n.total_count > 1000);
+      const totalUniverse = univNode ? univNode.total_count : '─';
+      const totalResult = last.total_count || last.data.length;
+
+      const firstRow = last.data[0] || {};
+      const macroVix = firstRow.macro_vix ? parseFloat(firstRow.macro_vix).toFixed(2) : "N/A";
+      const macroWarning = firstRow.macro_warning ? ` -> 🚨 매수 차단 경고: ${firstRow.macro_warning}` : "";
+      const sp500Trend = firstRow.sp500_200ma_up === true ? "200일선 위 (우상향)" : (firstRow.sp500_200ma_up === false ? "200일선 아래 (우하향)" : "N/A");
+
+      const header = [
+        `[시스템 분석 요약]`,
+        `분석 일자: ${today}`,
+        `대상 시장: ${state.market}`,
+        `거시 위험도(VIX): ${macroVix}${macroWarning}`,
+        `S&P500 추세: ${sp500Trend}`,
+        ``,
+        `[종목 상세]`,
+      ].join('\n');
+
+      const rows = last.data.map((row, i) => {
+        let vcpWarn = row.vcp_warning ? ` (경고: ${row.vcp_warning})` : "";
+        let boWarn = row.box_breakout_warning ? ` (경고: ${row.box_breakout_warning})` : "";
+        
+        let sp500Warn = "";
+        if (row.tier === 1 && row.sp500_200ma_up === false) {
+          sp500Warn = " ⚠️ S&P500 200일선 아래입니다. Tier 1이지만 비중 조절을 권장합니다.";
+        }
+        
+        let mc = row.market_cap ? Math.round(row.market_cap / 100000000).toLocaleString() + "억원" : "N/A";
+        
+        return [
+          `종목명: ${row.name || ''} (${row.code || ''})`,
+          `섹터: ${row.sector || '기타'}`,
+          `시가총액: ${mc}`,
+          `총점: ${row.total_score || 0} / 210 (Tier ${row.tier || 3})${sp500Warn}`,
+          `- VCP 점수: ${row.vcp_score || 0}${vcpWarn}`,
+          `- 돌파 등급: ${row.box_breakout_grade || 'D'}${boWarn}`,
+          `- RS 백분위: ${row.rs_rating || 0} (점수: ${row.rs_score || 0})`,
+          `- 수급 점수: ${row.flow_score || 0} (외국인 순매수: ${row.foreign_net_buy || 0}, 기관 순매수: ${row.institution_net_buy || 0})`,
+          `--------------------------------------------------------`
+        ].join('\n');
+      });
+
+      const text = header + rows.join('\n');
+
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById('btnCopyAll');
+        btn.textContent = '✅ 복사됨';
+        setTimeout(() => { btn.textContent = '📋 전체 복사'; }, 1500);
+      }).catch(() => alert('클립보드 복사에 실패했습니다.'));
+    }
+
+    function exportCSV() {
+      if (!state.results) return alert('먼저 분석을 실행하세요.');
+      const nr = state.results.node_results;
+      const last = nr[Object.keys(nr).pop()];
+      if (!last || !last.data?.length) return;
+      const cols = last.columns || Object.keys(last.data[0]);
+      let csv = '\uFEFF' + cols.join(',') + '\n';
+      last.data.forEach(r => {
+        csv += cols.map(c => r[c] ?? '').join(',') + '\n';
+      });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `alphaforge_${new Date().toISOString().slice(0,10)}.csv`;
+      a.click();
+    }
+  </script>
+</body>
+</html>

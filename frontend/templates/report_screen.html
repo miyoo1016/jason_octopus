@@ -1,0 +1,47 @@
+{% extends "template_base.html" %}
+{% block title %}AlphaForge - 스크리닝 리포트{% endblock %}
+
+{% block content %}
+<div class="report-header">
+    <h1>스크리닝 결과 리포트</h1>
+    <p class="subtitle">기준일: {{ as_of_date }} | 실행 노드: {{ node_id }}</p>
+    <div class="summary-cards">
+        <div class="card">
+            <h3>통과 종목수</h3>
+            <p class="value highlight">{{ row_count }}</p>
+        </div>
+        <div class="card">
+            <h3>처리 시간</h3>
+            <p class="value">{{ "%.1f"|format(latency_ms) }} ms</p>
+        </div>
+    </div>
+</div>
+
+<div class="report-section">
+    <h2>종목 목록</h2>
+    {% if rows %}
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    {% for col in columns %}
+                    <th>{{ col }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    {% for col in columns %}
+                    <td>{{ row[col] }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="empty-state">통과한 종목이 없습니다.</p>
+    {% endif %}
+</div>
+{% endblock %}

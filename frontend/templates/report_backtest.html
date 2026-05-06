@@ -1,0 +1,68 @@
+{% extends "template_base.html" %}
+{% block title %}AlphaForge - 백테스트 리포트{% endblock %}
+
+{% block content %}
+<div class="report-header">
+    <h1>백테스트 결과 리포트</h1>
+    <p class="subtitle">전략: {{ strategy_name }} | 기간: {{ start_date }} ~ {{ end_date }}</p>
+    
+    <div class="summary-cards">
+        <div class="card">
+            <h3>총 수익률</h3>
+            <p class="value {% if total_return > 0 %}success{% else %}error{% endif %}">
+                {{ "%.2f"|format(total_return) }}%
+            </p>
+        </div>
+        <div class="card">
+            <h3>승률</h3>
+            <p class="value">{{ "%.1f"|format(win_rate) }}%</p>
+        </div>
+        <div class="card">
+            <h3>최대 낙폭 (MDD)</h3>
+            <p class="value error">{{ "%.2f"|format(mdd) }}%</p>
+        </div>
+        <div class="card">
+            <h3>매매 횟수</h3>
+            <p class="value">{{ trade_count }}회</p>
+        </div>
+    </div>
+</div>
+
+<div class="report-section">
+    <h2>거래 내역</h2>
+    {% if trades %}
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>진입일</th>
+                    <th>청산일</th>
+                    <th>종목코드</th>
+                    <th>종목명</th>
+                    <th>진입가</th>
+                    <th>청산가</th>
+                    <th>수익률</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for trade in trades %}
+                <tr>
+                    <td>{{ trade.entry_date }}</td>
+                    <td>{{ trade.exit_date }}</td>
+                    <td>{{ trade.code }}</td>
+                    <td>{{ trade.name }}</td>
+                    <td>{{ "{:,.0f}".format(trade.entry_price) }}</td>
+                    <td>{{ "{:,.0f}".format(trade.exit_price) }}</td>
+                    <td class="{% if trade.return_pct > 0 %}success{% else %}error{% endif %}">
+                        {{ "%.2f"|format(trade.return_pct) }}%
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="empty-state">거래 내역이 없습니다.</p>
+    {% endif %}
+</div>
+{% endblock %}

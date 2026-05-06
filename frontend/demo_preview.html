@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AlphaForge KR — 스크리닝 결과 데모</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ── 헤더 ── -->
+  <header class="page-header">
+    <div class="container">
+      <div class="page-title">
+        <div class="logo-mark">AF</div>
+        <span>AlphaForge KR</span>
+        <span style="font-weight:400;color:var(--color-text-muted);font-size:var(--text-base);">
+          — KR VCP × 외국인 → LLM → 텔레그램
+        </span>
+      </div>
+      <div class="page-meta">
+        <span>기준일: <strong>2026-05-05</strong></span>
+        <span>생성: <strong>2026-05-05 14:30 KST</strong></span>
+        <span class="font-mono text-faint" style="font-size:var(--text-xs);">run_abc123def456</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── 파이프라인 흐름 ── -->
+  <div style="background:var(--color-surface-2);border-bottom:1px solid var(--color-border);">
+    <div class="container" style="padding-top:var(--space-3);padding-bottom:var(--space-3);">
+      <div class="pipeline-summary" style="margin-bottom:0;">
+        <div class="pipeline-node">
+          <span class="pipeline-node-name">국장 종목</span>
+          <span class="pipeline-node-count">2,695</span>
+        </div>
+        <span class="pipeline-arrow">→</span>
+        <div class="pipeline-node">
+          <span class="pipeline-node-name">VCP 패턴</span>
+          <span class="pipeline-node-count">251</span>
+        </div>
+        <span class="pipeline-arrow">→</span>
+        <div class="pipeline-node">
+          <span class="pipeline-node-name">외국인 매수</span>
+          <span class="pipeline-node-count">1,300</span>
+        </div>
+        <span class="pipeline-arrow">→</span>
+        <div class="pipeline-node">
+          <span class="pipeline-node-name">AND 교집합</span>
+          <span class="pipeline-node-count">155</span>
+        </div>
+        <span class="pipeline-arrow">→</span>
+        <div class="pipeline-node">
+          <span class="pipeline-node-name">점수 필터 ≥0.6</span>
+          <span class="pipeline-node-count">114</span>
+        </div>
+        <span class="pipeline-arrow">→</span>
+        <div class="pipeline-node">
+          <span class="pipeline-node-name">AI 분석 (Gemini)</span>
+          <span class="pipeline-node-count">5</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 메인 콘텐츠 ── -->
+  <main class="page-content">
+    <div class="container">
+
+      <!-- 요약 통계 -->
+      <div class="stats-grid mb-6">
+        <div class="stat-card">
+          <div class="stat-label">전체 유니버스</div>
+          <div class="stat-value">2,695</div>
+          <div class="stat-desc">KOSPI + KOSDAQ</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">최종 통과</div>
+          <div class="stat-value accent">114</div>
+          <div class="stat-desc">유니버스의 4.2%</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">AI 분석 종목</div>
+          <div class="stat-value">5</div>
+          <div class="stat-desc">Gemini Flash 코멘트</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">실행 시간</div>
+          <div class="stat-value font-mono" style="font-size:var(--text-lg);">8,112ms</div>
+          <div class="stat-desc">총 파이프라인</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">API 비용</div>
+          <div class="stat-value font-mono" style="font-size:var(--text-lg);">$0.0100</div>
+          <div class="stat-desc">Gemini Flash</div>
+        </div>
+      </div>
+
+      <!-- 종목 결과 테이블 -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">스크리닝 결과 — Top 5 AI 분석</div>
+            <div class="card-subtitle">
+              점수 높은 순 · 기준일 2026-05-05 · VCP + 이평선 정배열 + 외국인/기관 동시 순매수
+            </div>
+          </div>
+          <button style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;
+                         background:var(--color-accent);color:#fff;border:none;cursor:pointer;
+                         border-radius:var(--radius-md);font-size:var(--text-sm);
+                         font-weight:var(--weight-medium);">
+            ↓ Excel 다운로드
+          </button>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style="text-align:center;">순위</th>
+                <th>종목코드</th>
+                <th>종목명</th>
+                <th>시장</th>
+                <th style="text-align:right;">종가</th>
+                <th>종합점수</th>
+                <th style="text-align:center;">박스돌파</th>
+                <th style="text-align:center;">MA정배열</th>
+                <th style="text-align:center;">외국인 5일</th>
+                <th style="text-align:center;">기관 5일</th>
+                <th>AI 코멘트</th>
+              </tr>
+            </thead>
+            <tbody>
+
+              <!-- 1위 -->
+              <tr>
+                <td class="td-rank">1</td>
+                <td class="td-mono">025750</td>
+                <td style="font-weight:var(--weight-semi);">한솔홈데코</td>
+                <td><span class="badge badge-info">KOSPI</span></td>
+                <td class="text-right font-mono">4,235원</td>
+                <td>
+                  <div class="score-bar">
+                    <div class="score-bar-track">
+                      <div class="score-bar-fill high" style="width:100%;"></div>
+                    </div>
+                    <span class="score-value text-success">10.0</span>
+                  </div>
+                </td>
+                <td class="text-center"><span class="badge badge-success">✓ 307%</span></td>
+                <td class="text-center"><span class="badge badge-success">✓ 61%</span></td>
+                <td class="text-center text-success font-mono" style="font-size:var(--text-xs);">+75,983주</td>
+                <td class="text-center text-success font-mono" style="font-size:var(--text-xs);">+167,822주</td>
+                <td style="font-size:var(--text-xs);color:var(--color-text-muted);max-width:300px;line-height:1.7;">
+                  박스 돌파(307%) + 이동평균 정배열(61%) + 외국인/기관 동시 순매수(외인 6%, 기관 13%)로
+                  모든 지표 강력. 매우 높음.
+                </td>
+              </tr>
+
+              <!-- 2위 -->
+              <tr>
+                <td class="td-rank">2</td>
+                <td class="td-mono">108670</td>
+                <td style="font-weight:var(--weight-semi);">LX하우시스</td>
+                <td><span class="badge badge-info">KOSPI</span></td>
+                <td class="text-right font-mono">52,400원</td>
+                <td>
+                  <div class="score-bar">
+                    <div class="score-bar-track">
+                      <div class="score-bar-fill high" style="width:100%;"></div>
+                    </div>
+                    <span class="score-value text-success">10.0</span>
+                  </div>
+                </td>
+                <td class="text-center"><span class="badge badge-success">✓ 6%</span></td>
+                <td class="text-center"><span class="badge badge-success">✓ 11%</span></td>
+                <td class="text-center text-success font-mono" style="font-size:var(--text-xs);">+외인 8%</td>
+                <td class="text-center text-success font-mono" style="font-size:var(--text-xs);">+기관 7%</td>
+                <td style="font-size:var(--text-xs);color:var(--color-text-muted);max-width:300px;line-height:1.7;">
+                  높음. 박스 돌파(6%) + 이동평균 정배열(11%) + 외국인/기관 순매수 비중 높음.
+                </td>
+              </tr>
+
+              <!-- 3위 -->
+              <tr>
+                <td class="td-rank">3</td>
+                <td class="td-mono">042040</td>
+                <td style="font-weight:var(--weight-semi);">케이피엠테크</td>
+                <td><span class="badge badge-accent">KOSDAQ</span></td>
+                <td class="text-right font-mono">18,750원</td>
+                <td>
+                  <div class="score-bar">
+                    <div class="score-bar-track">
+                      <div class="score-bar-fill high" style="width:90%;"></div>
+                    </div>
+                    <span class="score-value text-success">9.0</span>
+                  </div>
+                </td>
+                <td class="text-center"><span class="badge badge-success">✓ 445%</span></td>
+                <td class="text-center"><span class="badge badge-success">✓ 96%</span></td>
+                <td class="text-center text-success font-mono" style="font-size:var(--text-xs);">+기관 5%</td>
+                <td class="text-center text-success font-mono" style="font-size:var(--text-xs);">+기관 확인</td>
+                <td style="font-size:var(--text-xs);color:var(--color-text-muted);max-width:300px;line-height:1.7;">
+                  높음. 박스 돌파(445%) + 이동평균 정배열(96%) + 기관 순매수 확실(5%).
+                </td>
+              </tr>
+
+              <!-- 4위 -->
+              <tr>
+                <td class="td-rank">4</td>
+                <td class="td-mono">140150</td>
+                <td style="font-weight:var(--weight-semi);">미래생명자원</td>
+                <td><span class="badge badge-accent">KOSDAQ</span></td>
+                <td class="text-right font-mono">3,180원</td>
+                <td>
+                  <div class="score-bar">
+                    <div class="score-bar-track">
+                      <div class="score-bar-fill mid" style="width:81%;"></div>
+                    </div>
+                    <span class="score-value" style="color:var(--color-warning);">8.1</span>
+                  </div>
+                </td>
+                <td class="text-center"><span class="badge badge-success">✓</span></td>
+                <td class="text-center"><span class="badge badge-success">✓</span></td>
+                <td class="text-center text-success font-mono" style="font-size:var(--text-xs);">+외인 누적</td>
+                <td class="text-center text-muted" style="font-size:var(--text-xs);">—</td>
+                <td style="font-size:var(--text-xs);color:var(--color-text-muted);max-width:300px;line-height:1.7;">
+                  B급 (score 81/100). 외국인 누적 순매수 양호. 기관 수급 확인 필요.
+                </td>
+              </tr>
+
+              <!-- 5위 -->
+              <tr>
+                <td class="td-rank">5</td>
+                <td class="td-mono">347770</td>
+                <td style="font-weight:var(--weight-semi);">핌스</td>
+                <td><span class="badge badge-accent">KOSDAQ</span></td>
+                <td class="text-right font-mono">8,420원</td>
+                <td>
+                  <div class="score-bar">
+                    <div class="score-bar-track">
+                      <div class="score-bar-fill mid" style="width:60%;"></div>
+                    </div>
+                    <span class="score-value" style="color:var(--color-warning);">6.0</span>
+                  </div>
+                </td>
+                <td class="text-center"><span class="badge badge-success">✓</span></td>
+                <td class="text-center"><span class="text-faint">—</span></td>
+                <td class="text-center text-success font-mono" style="font-size:var(--text-xs);">+외인 소량</td>
+                <td class="text-center text-muted" style="font-size:var(--text-xs);">—</td>
+                <td style="font-size:var(--text-xs);color:var(--color-text-muted);max-width:300px;line-height:1.7;">
+                  B급 (score 60/100). 이평선 정배열 미충족. 추가 확인 권장.
+                </td>
+              </tr>
+
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 노드 실행 내역 -->
+      <div class="card mt-6">
+        <div class="card-header">
+          <div class="card-title">노드 실행 내역</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>노드</th>
+                <th style="text-align:right;">입력</th>
+                <th style="text-align:right;">출력</th>
+                <th style="text-align:right;">소요시간</th>
+                <th>캐시</th>
+                <th>상태</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="font-weight:var(--weight-medium);">국장 종목</td>
+                <td class="text-right font-mono">—</td>
+                <td class="text-right font-mono text-accent">2,695</td>
+                <td class="text-right font-mono text-muted">320ms</td>
+                <td><span class="badge badge-info">캐시</span></td>
+                <td><span class="badge badge-success">OK</span></td>
+              </tr>
+              <tr>
+                <td style="font-weight:var(--weight-medium);">VCP 패턴 찾기</td>
+                <td class="text-right font-mono">2,695</td>
+                <td class="text-right font-mono text-accent">251</td>
+                <td class="text-right font-mono text-muted">1,840ms</td>
+                <td><span class="text-faint font-mono" style="font-size:var(--text-xs);">신규</span></td>
+                <td><span class="badge badge-success">OK</span></td>
+              </tr>
+              <tr>
+                <td style="font-weight:var(--weight-medium);">외국인 매수 찾기</td>
+                <td class="text-right font-mono">2,695</td>
+                <td class="text-right font-mono text-accent">1,300</td>
+                <td class="text-right font-mono text-muted">950ms</td>
+                <td><span class="badge badge-info">캐시</span></td>
+                <td><span class="badge badge-success">OK</span></td>
+              </tr>
+              <tr>
+                <td style="font-weight:var(--weight-medium);">AND 교집합</td>
+                <td class="text-right font-mono">251 + 1,300</td>
+                <td class="text-right font-mono text-accent">155</td>
+                <td class="text-right font-mono text-muted">12ms</td>
+                <td><span class="text-faint font-mono" style="font-size:var(--text-xs);">신규</span></td>
+                <td><span class="badge badge-success">OK</span></td>
+              </tr>
+              <tr>
+                <td style="font-weight:var(--weight-medium);">점수로 거르기 (≥0.6)</td>
+                <td class="text-right font-mono">155</td>
+                <td class="text-right font-mono text-accent">114</td>
+                <td class="text-right font-mono text-muted">88ms</td>
+                <td><span class="text-faint font-mono" style="font-size:var(--text-xs);">신규</span></td>
+                <td><span class="badge badge-success">OK</span></td>
+              </tr>
+              <tr>
+                <td style="font-weight:var(--weight-medium);">AI에게 묻기 (Gemini Flash)</td>
+                <td class="text-right font-mono">5</td>
+                <td class="text-right font-mono text-accent">5</td>
+                <td class="text-right font-mono text-muted">4,902ms</td>
+                <td><span class="text-faint font-mono" style="font-size:var(--text-xs);">신규</span></td>
+                <td><span class="badge badge-success">OK</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- ── 워터마크 ── -->
+  <footer>
+    <div class="container">
+      <div class="watermark">
+        본 리포트는 투자 참고용이며 매수·매도를 권유하지 않습니다.
+        모든 투자 판단과 책임은 본인에게 있습니다. — AlphaForge KR | 2026-05-05 14:30 KST
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

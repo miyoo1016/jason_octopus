@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}AlphaForge KR{% endblock %}</title>
+
+  <!-- Claude 톤 디자인 시스템 -->
+  <link rel="stylesheet" href="/static/styles.css">
+
+  <!-- 인라인 스타일: 템플릿별 오버라이드 용도로만 사용 -->
+  {% block extra_styles %}{% endblock %}
+</head>
+<body>
+
+  <!-- ── 페이지 헤더 ───────────────────────────────────────────────────────── -->
+  <header class="page-header">
+    <div class="container">
+      <div class="page-title">
+        <div class="logo-mark">AF</div>
+        <span>AlphaForge KR</span>
+        {% if report_type %}
+          <span style="font-weight:400;color:var(--color-text-muted);font-size:var(--text-base);">
+            — {{ report_type }}
+          </span>
+        {% endif %}
+      </div>
+
+      <div class="page-meta">
+        {% if as_of_date %}
+          <span>기준일: <strong>{{ as_of_date }}</strong></span>
+        {% endif %}
+        {% if generated_at %}
+          <span>생성: <strong>{{ generated_at }}</strong></span>
+        {% endif %}
+        {% if run_id %}
+          <span class="font-mono text-faint" style="font-size:var(--text-xs);">{{ run_id }}</span>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+
+  <!-- ── 파이프라인 흐름 요약 (선택) ─────────────────────────────────────── -->
+  {% if pipeline_nodes %}
+  <div style="background:var(--color-surface-2);border-bottom:1px solid var(--color-border);">
+    <div class="container" style="padding-top:var(--space-3);padding-bottom:var(--space-3);">
+      <div class="pipeline-summary" style="margin-bottom:0;">
+        {% for node in pipeline_nodes %}
+          <div class="pipeline-node">
+            <span class="pipeline-node-name">{{ node.name }}</span>
+            <span class="pipeline-node-count">{{ node.count }}</span>
+          </div>
+          {% if not loop.last %}
+            <span class="pipeline-arrow">→</span>
+          {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ── 메인 콘텐츠 ──────────────────────────────────────────────────────── -->
+  <main class="page-content">
+    <div class="container">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+
+  <!-- ── 푸터 워터마크 ────────────────────────────────────────────────────── -->
+  <footer>
+    <div class="container">
+      <div class="watermark">
+        본 리포트는 투자 참고용이며 매수·매도를 권유하지 않습니다.
+        모든 투자 판단과 책임은 본인에게 있습니다. — AlphaForge KR
+        {% if generated_at %}| {{ generated_at }}{% endif %}
+      </div>
+    </div>
+  </footer>
+
+  {% block extra_scripts %}{% endblock %}
+</body>
+</html>
