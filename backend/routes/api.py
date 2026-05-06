@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _execute_sync(body: dict) -> dict:
+def _execute_sync(body: dict, target_code: str = None) -> dict:
     """동기 실행 함수 (스레드풀에서 실행됨)."""
     krx = NaverKRXClient(cache_dir=settings.data_cache_dir)
     cache = ResultCache(cache_dir=settings.data_cache_dir)
@@ -49,8 +49,14 @@ def _execute_sync(body: dict) -> dict:
         inst = cls()
         if inst.INPUT_ARITY > 0 and nid not in edge_node_ids:
             continue  # 연결 안 된 비-소스 노드 건너뜀
+        
+        # 특정 종목 분석 요청 시 UniverseNode에 코드 주입
+        node_params = nd.get("params", {})
+        if ntype == "universe" and target_code:
+            node_params["manual_codes"] = [target_code]
+            
         nodes_map[nid] = inst
-        dag.add_node(nid, inst, nd.get("params", {}))
+        dag.add_node(nid, inst, node_params)
 
     # 엣지 등록 (양쪽 노드가 모두 등록된 것만, 슬롯은 자동 할당)
     for ed in raw_edges:
@@ -161,4 +167,46 @@ async def execute_dag(request: Request):
         return JSONResponse(result)
     except Exception as exc:
         logger.exception("DAG 실행 실패")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@router.post("/api/analyze_single_stock")
+async def analyze_single_stock(request: Request):
+    """특정 종목 1개만 정밀 분석."""
+    body = await request.json()
+    query = body.get("query", "").strip()
+    dag_config = body.get("dag_config", {})
+    
+    if not query:
+        return JSONResponse({"error": "종목명 또는 코드가 필요합니다."}, status_code=400)
+        
+    krx = NaverKRXClient(cache_dir=settings.data_cache_dir)
+    today = datetime.now().strftime("%Y-%m-%d")
+    as_of_date = today if is_trading_day(today) else prev_trading_day(today, n=1)
+    
+    # 1. 종목 코드 찾기
+    universe = krx.get_universe(as_of_date)
+    target = None
+    
+    # 코드(6자리 숫자)인지 확인
+    if query.isdigit() and len(query) == 6:
+        target = universe[universe["code"] == query]
+    else:
+        # 이름으로 찾기
+        target = universe[universe["name"].str.contains(query, case=False, na=False)]
+        
+    if target is None or target.empty:
+        return JSONResponse({"error": f"'{query}' 종목을 찾을 수 없습니다."}, status_code=404)
+        
+    target_code = target.iloc[0]["code"]
+    target_name = target.iloc[0]["name"]
+    
+    try:
+        # 2. 분석 실행 (target_code 주입)
+        result = await asyncio.to_thread(_execute_sync, dag_config, target_code)
+        result["target_name"] = target_name
+        result["target_code"] = target_code
+        return JSONResponse(result)
+    except Exception as exc:
+        logger.exception("단일 종목 분석 실패")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

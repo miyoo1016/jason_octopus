@@ -320,6 +320,50 @@ function showToast(msg) {
 // ── RUN ──
 function setupRun() {
   document.getElementById('btnRun')?.addEventListener('click', runStrategy);
+  document.getElementById('btnSingleAnalyze')?.addEventListener('click', runSingleAnalyze);
+  document.getElementById('targetStock')?.addEventListener('keydown', e => { if (e.key === 'Enter') runSingleAnalyze(); });
+}
+
+async function runSingleAnalyze() {
+  const btn = document.getElementById('btnSingleAnalyze');
+  const input = document.getElementById('targetStock');
+  const query = input.value.trim();
+  const loading = document.getElementById('loadingOverlay');
+  const enabled = Array.from(state.enabledSignals);
+
+  if (!query) { alert('분석할 종목명이나 코드를 입력하세요.'); return; }
+  if (enabled.length === 0) { alert('시그널을 1개 이상 선택하세요.'); return; }
+
+  btn.disabled = true;
+  loading.classList.add('show');
+  state.aiComments = {};
+
+  try {
+    const t0 = performance.now();
+    const resp = await fetch('/api/analyze_single_stock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, dag_config: buildDAG(enabled) }),
+    });
+    const result = await resp.json();
+    const elapsed = Math.round(performance.now() - t0);
+
+    if (result.error) { alert('분석 실패: ' + result.error); return; }
+
+    state.results = result;
+    renderResults(result, elapsed, enabled);
+    renderStrategyInsight(enabled, state.combine);
+    showToast(`${result.target_name} 정밀 분석 완료`);
+
+    const apiKey = getApiKey();
+    if (apiKey) runAiAnalysis(result, enabled, apiKey);
+
+  } catch (err) {
+    alert('API 오류: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    loading.classList.remove('show');
+  }
 }
 
 async function runStrategy() {

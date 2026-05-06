@@ -30,16 +30,21 @@
     <!-- LEFT: Strategy Config -->
     <section class="strategy-panel">
 
-      <!-- 시장 선택 -->
+      <!-- 시장 선택 및 종목 검색 -->
       <div class="card">
         <div class="card-header">
-          <div class="card-title"><span class="icon">📌</span> 시장 선택</div>
+          <div class="card-title"><span class="icon">📌</span> 분석 대상</div>
         </div>
         <div class="card-body">
           <div class="market-group">
             <button class="market-chip active" data-market="ALL">전체</button>
             <button class="market-chip" data-market="KOSPI">KOSPI</button>
             <button class="market-chip" data-market="KOSDAQ">KOSDAQ</button>
+          </div>
+          <div class="search-divider">OR</div>
+          <div class="stock-search-wrap">
+            <input type="text" id="targetStock" placeholder="종목명 또는 코드 입력 (예: 삼성전자)">
+            <button class="btn-search" id="btnSingleAnalyze">🔍 정밀 분석</button>
           </div>
         </div>
       </div>
