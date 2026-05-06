@@ -71,6 +71,17 @@ class ForeignFlowNode(BaseNode):
                 if long_flow_recent > long_flow_past:
                     score += 5
 
+            # [추가] 연속 매수성 확인 (퍼플렉시티 제안 반영)
+            consecutive_buys = 0
+            for r in hist[:5]: # 최근 5거래일 확인
+                if r[1] > 0:
+                    consecutive_buys += 1
+                else:
+                    break # 연속성 깨짐
+            
+            if consecutive_buys >= 3: score += 5  # 3일 연속 매수 보너스
+            if consecutive_buys >= 5: score += 5  # 5일 연속 매수 보너스 (총 10점)
+
             scores.append(min(30, score))
             
         result["flow_score"] = scores

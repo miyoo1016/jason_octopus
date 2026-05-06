@@ -44,8 +44,13 @@ class ScoreFilterNode(BaseNode):
             i_flow = float(row.get("institution_flow_score", 0)) if not pd.isna(row.get("institution_flow_score", 0)) else 0.0
             flow = min(30.0, f_flow + i_flow) # 외국인/기관 수급 합산 (최대 30점)
             
-            total = int(vcp + breakout_score + rs + flow)
-            total = min(total, 210) # 210점 만점 캡 적용 (오버플로우 방지)
+            # [추가] 섹터 강세 보너스 (+5점)
+            sector_bonus = 0
+            if "✅" in str(row.get("sector_strength_label", "")):
+                sector_bonus = 5
+            
+            total = int(vcp + breakout_score + rs + flow + sector_bonus)
+            total = min(total, 210) # 210점 만점 캡 적용
             
             row_dict = row.to_dict()
             row_dict["total_score"] = total
