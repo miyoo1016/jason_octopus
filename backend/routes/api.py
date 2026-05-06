@@ -103,15 +103,22 @@ _SIGNAL_LABELS: dict[str, str] = {
 }
 
 
-def _run_ai_analysis(stocks: list[dict], api_key: str, provider: str, signals: list[str]) -> dict:
+def _run_ai_analysis(stocks: list[dict], api_key: str, provider: str, signals: list[str], as_of_date: str) -> dict:
     signal_names = [_SIGNAL_LABELS.get(s, s) for s in signals]
-    system_prompt = (
-        f"당신은 한국 주식 전문 애널리스트입니다. "
-        f"다음 조건으로 스크리닝된 종목들을 분석합니다: {', '.join(signal_names)}. "
-        f"분석 시 반드시 '박스권 돌파 배수(X.X배)'와 'VCP 수축 거래량 백분율(XX.X%)' 등 정량적 수치를 근거로 포함하세요. "
-        f"각 종목의 팩터 값을 근거로 매매 관점의 간결한 분석을 제공하세요. "
-        f"투자 권유가 아닌 참고 분석임을 명심하세요."
-    )
+    system_prompt = f"""
+당신은 대한민국 최고의 주식 투자 전략가 'Antigravity'입니다.
+AlphaForge V2 시스템의 분석 결과를 바탕으로 투자 전략 리포트를 작성하세요.
+
+[리포트 작성 규칙]
+1. 리포트 최상단에 반드시 다음 문구를 포함하세요: "[분석 기준: {as_of_date} 16:00 KST 확정치]"
+2. 종목 요약 시 반드시 다음 수치를 언급하세요:
+   - 돌파 거래량 배수 (예: A등급 15.6배)
+   - VCP 수축 횟수 및 이벤트 충격 분리 여부
+   - 외국인/기관 수급의 연속성 및 쌍끌이 여부
+3. 전문적이고 냉철한 톤을 유지하되, 주도주에 대해서는 강력한 확신을 전달하세요.
+각 종목의 팩터 값을 근거로 매매 관점의 간결한 분석을 제공하세요. 
+투자 권유가 아닌 참고 분석임을 명심하세요."""
+
     if provider == "claude":
         from llm.claude import claude_analyze_stocks
         comments, cost = claude_analyze_stocks(stocks, api_key, system_prompt=system_prompt)
@@ -130,13 +137,16 @@ async def ai_comment(request: Request):
     provider = body.get("provider", "gemini")
     signals  = body.get("signals", [])
 
+    today = datetime.now().strftime("%Y-%m-%d")
+    as_of_date = body.get("as_of_date") or (today if is_trading_day(today) else prev_trading_day(today, n=1))
+
     if not stocks:
         return JSONResponse({"comments": {}, "cost_usd": 0.0})
     if not api_key:
         return JSONResponse({"error": "API 키가 필요합니다."}, status_code=400)
 
     try:
-        result = await asyncio.to_thread(_run_ai_analysis, stocks, api_key, provider, signals)
+        result = await asyncio.to_thread(_run_ai_analysis, stocks, api_key, provider, signals, as_of_date)
         return JSONResponse(result)
     except Exception as exc:
         logger.exception("AI 분석 실패")

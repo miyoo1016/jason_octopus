@@ -42,13 +42,16 @@ class ScoreFilterNode(BaseNode):
             
             f_flow = float(row.get("flow_score", 0)) if not pd.isna(row.get("flow_score", 0)) else 0.0
             i_flow = float(row.get("institution_flow_score", 0)) if not pd.isna(row.get("institution_flow_score", 0)) else 0.0
+            f_net_buy = float(row.get("foreign_net_buy", 0)) if not pd.isna(row.get("foreign_net_buy", 0)) else 0.0
             
-            # [개선] 수급 질적 필터링 (퍼플렉시티 제안: 역방향 수급 패널티)
-            # 외인/기관 둘 다 양수일 때만 고득점(15점 초과) 허용
-            if f_flow > 0 and i_flow > 0:
+            # [최종] 수급 질적 필터링 (외인 이탈 임계값 반영)
+            # 1. 외인/기관 둘 다 양수일 때만 고득점 허용
+            # 2. 외인 순매도가 10만주 이상이면 무조건 15점 캡 (심각한 이탈로 간주)
+            if f_net_buy < -100000:
+                flow = min(15.0, f_flow + i_flow)
+            elif f_flow > 0 and i_flow > 0:
                 flow = min(30.0, f_flow + i_flow)
             else:
-                # 어느 한쪽이 팔고 있거나 수급이 없으면 최대 15점으로 제한
                 flow = min(15.0, f_flow + i_flow)
             
             # [추가] 섹터 강세 보너스 (+5점)

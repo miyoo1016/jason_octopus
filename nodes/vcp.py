@@ -99,6 +99,7 @@ class VcpNode(BaseNode):
             
             # [개선] 25% 이상의 낙폭은 VCP 수축이 아닌 '이벤트 충격'으로 분류하여 제외
             valid_contractions = [d for d in all_contractions if d <= 25.0]
+            event_shocks = [d for d in all_contractions if d > 25.0]
             num_contractions = len(valid_contractions)
             
             if num_contractions < 2: # 최소 수축 횟수 미달 시 스킵
@@ -106,6 +107,11 @@ class VcpNode(BaseNode):
                 
             depth_str = "->".join([f"{d:.1f}%" for d in valid_contractions])
             vcp_info = f"수축 {num_contractions}회: {depth_str}"
+            
+            # [추가] 분리된 이벤트 충격 표시
+            if event_shocks:
+                shock_str = ", ".join([f"{s:.1f}%" for s in event_shocks])
+                vcp_info += f" (⚠️ 이벤트 충격 {shock_str} 분리됨)"
 
             # [개선] 역수축 판정: 3회 연속 증가할 때만 경고
             is_reverse = False
