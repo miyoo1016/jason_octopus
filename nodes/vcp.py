@@ -72,6 +72,11 @@ class VcpNode(BaseNode):
                         
             num_pivots = len(pivot_indices)
             if num_pivots < 3:
+                if context.is_single_analysis:
+                    row_dict = row.to_dict()
+                    row_dict["vcp_score"] = 0
+                    row_dict["vcp_warning"] = "❌ VCP 패턴 미형성 (피벗 부족)"
+                    results.append(row_dict)
                 continue
                 
             # 2. Calculate Contraction Depth
@@ -92,6 +97,11 @@ class VcpNode(BaseNode):
             all_contractions = contractions + [final_depth]
             
             if max(all_contractions) > max_depth:
+                if context.is_single_analysis:
+                    row_dict = row.to_dict()
+                    row_dict["vcp_score"] = 0
+                    row_dict["vcp_warning"] = f"❌ 변동성 과다 ({max(all_contractions):.1f}% > {max_depth}%)"
+                    results.append(row_dict)
                 continue
                 
             # 1. 스윙 탐지 기간 제한 (최근 65거래일, 약 3개월로 제한하여 과거 데이터 왜곡 방지)
@@ -103,6 +113,11 @@ class VcpNode(BaseNode):
             num_contractions = len(valid_contractions)
             
             if num_contractions < 2: # 최소 수축 횟수 미달 시 스킵
+                if context.is_single_analysis:
+                    row_dict = row.to_dict()
+                    row_dict["vcp_score"] = 50 if num_contractions == 1 else 0
+                    row_dict["vcp_warning"] = f"⚠️ 수축 횟수 미달 ({num_contractions}회)"
+                    results.append(row_dict)
                 continue
                 
             depth_str = "->".join([f"{d:.1f}%" for d in valid_contractions])

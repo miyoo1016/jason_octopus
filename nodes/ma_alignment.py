@@ -45,10 +45,10 @@ class MaAlignmentNode(BaseNode):
             ma20 = last_row["MA20"]
             ma60 = last_row["MA60"]
             
-            if pd.isna(ma5) or pd.isna(ma20) or pd.isna(ma60):
-                continue
-                
-            if ma5 > ma20 > ma60:
+            is_aligned = (not pd.isna(ma5) and not pd.isna(ma20) and not pd.isna(ma60) and ma5 > ma20 > ma60)
+            
+            # [개선] 정밀 분석 모드면 정배열 여부 상관없이 통과
+            if is_aligned or context.is_single_analysis:
                 valid_codes.add(code)
                 
         result = df[df["code"].isin(valid_codes)].reset_index(drop=True)

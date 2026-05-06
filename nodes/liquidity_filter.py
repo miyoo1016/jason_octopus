@@ -47,11 +47,14 @@ class LiquidityFilterNode(BaseNode):
 
             # 시가총액 하한 필터 (API 데이터 기준, 추가 네트워크 호출 없음)
             market_cap = row.get("market_cap", 0) or 0
-            if params.min_market_cap_krw > 0 and market_cap < params.min_market_cap_krw:
-                continue
-
+            
             hist = ohlcv_dict.get(code)
             if hist is None or hist.empty or len(hist) < 5:
+                if context.is_single_analysis:
+                    row_dict = row.to_dict()
+                    row_dict["avg_trading_value"] = 0
+                    row_dict["liquidity_warning"] = "❌ 데이터 부족"
+                    results.append(row_dict)
                 continue
 
             # Look-ahead 방지
@@ -62,9 +65,15 @@ class LiquidityFilterNode(BaseNode):
             trading_values = recent["close"] * recent["volume"]
             avg_value = trading_values.mean()
 
-            if avg_value >= params.min_trading_value_krw:
+            # [개선] 정밀 분석 모드면 통과 여부 상관없이 데이터 포함
+            is_passed_cap = (params.min_market_cap_krw <= 0 or market_cap >= params.min_market_cap_krw)
+            is_passed_val = (avg_value >= params.min_trading_value_krw)
+
+            if context.is_single_analysis or (is_passed_cap and is_passed_val):
                 row_dict = row.to_dict()
                 row_dict["avg_trading_value"] = int(avg_value)
+                if not is_passed_cap or not is_passed_val:
+                    row_dict["liquidity_warning"] = "⚠️ 유동성 부족 (주의)"
                 results.append(row_dict)
 
         if not results:

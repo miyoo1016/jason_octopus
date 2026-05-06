@@ -49,6 +49,7 @@ class ExecutionContext:
     run_id: str
     cache_dir: str = ""
     krx_client: Any = None
+    is_single_analysis: bool = False  # 특정 종목 정밀 분석 모드 (필터링 방지)
     extras: dict[str, Any] = field(default_factory=dict)
 
 

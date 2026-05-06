@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _execute_sync(body: dict, target_code: str = None) -> dict:
+def _execute_sync(body: dict, target_code: str = None, is_single: bool = False) -> dict:
     """동기 실행 함수 (스레드풀에서 실행됨)."""
     krx = NaverKRXClient(cache_dir=settings.data_cache_dir)
     cache = ResultCache(cache_dir=settings.data_cache_dir)
@@ -66,7 +66,7 @@ def _execute_sync(body: dict, target_code: str = None) -> dict:
         dag.add_edge(fid, tid)
 
     # 실행
-    result = dag.execute(as_of_date, cache, krx_client=krx)
+    result = dag.execute(as_of_date, cache, krx_client=krx, is_single=is_single)
 
     # 응답 조립
     node_results = {}
@@ -202,8 +202,8 @@ async def analyze_single_stock(request: Request):
     target_name = target.iloc[0]["name"]
     
     try:
-        # 2. 분석 실행 (target_code 주입)
-        result = await asyncio.to_thread(_execute_sync, dag_config, target_code)
+        # 2. 분석 실행 (target_code 및 is_single=True 주입)
+        result = await asyncio.to_thread(_execute_sync, dag_config, target_code, is_single=True)
         result["target_name"] = target_name
         result["target_code"] = target_code
         return JSONResponse(result)

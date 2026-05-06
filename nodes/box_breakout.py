@@ -58,38 +58,41 @@ class BoxBreakoutNode(BaseNode):
             
             if box_high > 0:
                 breakout_pct = ((curr_close / box_high) - 1.0) * 100
-                if breakout_pct >= params.breakout_pct:
-                    # Grade evaluation
-                    is_yangbong = curr_close > curr_open
-                    high_pos = curr_close >= curr_high * 0.95
-                    res_break = curr_close >= box_high * 1.01
-                    
-                    vol_ratio = curr_vol / avg_vol_20 if avg_vol_20 > 0 else 0
-                    
-                    # Perplexity 로드맵 적용: 정량적 배수 기준 (1.5x, 1.2x, 1.0x)
+                is_passed = breakout_pct >= params.breakout_pct
+                
+                # Grade evaluation
+                is_yangbong = curr_close > curr_open
+                high_pos = curr_close >= curr_high * 0.95
+                res_break = curr_close >= box_high * 1.01
+                vol_ratio = curr_vol / avg_vol_20 if avg_vol_20 > 0 else 0
+                
+                grade = "D"
+                warning = None
+                
+                if vol_ratio >= 1.5 and is_yangbong and high_pos and res_break:
+                    grade = "A"
+                elif vol_ratio >= 1.2 and is_yangbong:
+                    grade = "B"
+                elif vol_ratio >= 1.0:
+                    grade = "C"
+                    warning = f"⚠️ 거래량 미확인 ({vol_ratio:.1f}배)"
+                else:
                     grade = "D"
-                    warning = None
+                    warning = f"⚠️ 거래량 부족 ({vol_ratio:.1f}배)"
                     
-                    if vol_ratio >= 1.5 and is_yangbong and high_pos and res_break:
-                        grade = "A"
-                    elif vol_ratio >= 1.2 and is_yangbong:
-                        grade = "B"
-                    elif vol_ratio >= 1.0:
-                        grade = "C"
-                        warning = f"⚠️ 거래량 미확인 ({vol_ratio:.1f}배)"
-                    else:
-                        grade = "D"
-                        warning = f"⚠️ 거래량 부족 ({vol_ratio:.1f}배)"
-                        
-                    if grade == "D":
+                # [개선] 정밀 분석 모드면 통과 여부 상관없이 데이터 포함
+                if not context.is_single_analysis:
+                    if not is_passed or grade == "D":
                         continue
                         
-                    row_dict = row.to_dict()
-                    row_dict["box_breakout_pct"] = breakout_pct
-                    row_dict["box_breakout_grade"] = f"{grade} ({vol_ratio:.1f}배)"
-                    if warning:
-                        row_dict["box_breakout_warning"] = warning
-                    results.append(row_dict)
+                row_dict = row.to_dict()
+                row_dict["box_breakout_pct"] = breakout_pct
+                row_dict["box_breakout_grade"] = f"{grade} ({vol_ratio:.1f}배)"
+                if not is_passed:
+                    row_dict["box_breakout_warning"] = f"❌ 박스권 미돌파 ({breakout_pct:.1f}%)"
+                elif warning:
+                    row_dict["box_breakout_warning"] = warning
+                results.append(row_dict)
                     
         if not results:
             empty = df.head(0).copy()

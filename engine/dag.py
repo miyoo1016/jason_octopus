@@ -390,9 +390,9 @@ class DAG:
         self,
         as_of_date:    str,
         result_cache:  ResultCache,
-        krx_client:    Any = None,
         extras:        dict[str, Any] | None = None,
         force_refresh: bool = False,
+        is_single:     bool = False,
     ) -> ExecutionResult:
         """
         DAG를 위상 순서대로 실행합니다.
@@ -428,6 +428,7 @@ class DAG:
             run_id=run_id,
             cache_dir=str(result_cache.cache_dir),
             krx_client=krx_client,
+            is_single_analysis=is_single,
             extras=extras or {},
         )
 
