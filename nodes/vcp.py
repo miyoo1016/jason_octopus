@@ -97,9 +97,9 @@ class VcpNode(BaseNode):
             # 1. 스윙 탐지 기간 제한 (최근 65거래일, 약 3개월로 제한하여 과거 데이터 왜곡 방지)
             vcp_hist = hist.tail(65).copy()
             
-            # [개선] 25% 이상의 낙폭은 VCP 수축이 아닌 '이벤트 충격'으로 분류하여 제외
-            valid_contractions = [d for d in all_contractions if d <= 25.0]
-            event_shocks = [d for d in all_contractions if d > 25.0]
+            # [개선] 25.0% 이상의 낙폭은 VCP 수축이 아닌 '이벤트 충격'으로 분류하여 제외
+            valid_contractions = [d for d in all_contractions if d < 25.0]
+            event_shocks = [d for d in all_contractions if d >= 25.0]
             num_contractions = len(valid_contractions)
             
             if num_contractions < 2: # 최소 수축 횟수 미달 시 스킵
