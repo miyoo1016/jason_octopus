@@ -71,6 +71,7 @@ class ScoreFilterNode(BaseNode):
             # 총점을 기반으로 등급을 나누되, 핵심 지표(RS, 수급)가 부족하면 하향 조정
             tier = 3
             rs_val = float(row.get("rs_rating", 0)) if not pd.isna(row.get("rs_rating", 0)) else 0.0
+            vcp_warn = str(row.get("vcp_warning", ""))
             flow_score = float(row.get("flow_score", 0)) + float(row.get("institution_flow_score", 0))
             
             # 1. 총점 기반 기본 티어
