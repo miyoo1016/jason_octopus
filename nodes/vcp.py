@@ -10,13 +10,14 @@ from backend.algo_settings import algo_settings
 
 class VcpParams(BaseModel):
     lookback_days: int = 120
+    min_score: int = 70  # UI에서 동적으로 조절 가능하도록 추가
 
 class VcpNode(BaseNode):
     NODE_TYPE      = "vcp"
     DISPLAY_NAME   = "VCP 패턴 찾기"
     DESCRIPTION    = "변동성이 수축하는 VCP 패턴 형태 종목 필터."
     INPUT_ARITY    = 1
-    OUTPUT_COLUMNS = ("vcp_score",)
+    OUTPUT_COLUMNS = ("vcp_score", "change_pct")
     ParamsModel    = VcpParams
 
     def run(self, inputs: list[pd.DataFrame], params: VcpParams, context: ExecutionContext) -> pd.DataFrame:
@@ -24,13 +25,14 @@ class VcpNode(BaseNode):
         if df.empty or not context.krx_client:
             return df
             
-        lookback = algo_settings.vcp_lookback_days
+        lookback = params.lookback_days
         pivot_w = algo_settings.vcp_pivot_window
         max_depth = algo_settings.vcp_max_depth_pct
-        min_score = algo_settings.vcp_min_score
+        min_score = params.min_score
 
         start_date = prev_trading_day(context.as_of_date, n=lookback + 60)
-        codes = df["code"].tolist()
+        # [안전장치] VCP 계산 상위 200개 종목 제한
+        codes = df["code"].tolist()[:200]
         
         ohlcv_dict = context.krx_client.get_ohlcv_batch(codes, start_date, context.as_of_date)
 
@@ -154,24 +156,62 @@ class VcpNode(BaseNode):
                 vcp_info = f"🔥 주도주 패턴 완성! | {vcp_info}"
                 is_reverse = False
             
-            warning = None
+            warnings = []
             if len(hist) >= 60:
                 # [개선] 오늘의 폭발적 거래량을 수축기 평균에서 제외 (iloc[-21:-1])
                 vol_contraction_area = hist["volume"].iloc[-21:-1].mean()
                 vol_base = hist["volume"].iloc[-61:-1].mean()
                 vol_pct = (vol_contraction_area / vol_base * 100) if vol_base > 0 else 100
                 
-                if vol_pct <= 75: # 기준 소폭 완화
+                # [개선] 거래량 수축 판정 임계값 완화 (75% -> 90%)
+                if vol_pct <= 90:
                     if score < 100: score += 10
-                    warning = f"거래량 급감 확인 ({vol_pct:.1f}%)"
+                    warnings.append(f"거래량 급감 확인 ({vol_pct:.1f}%)")
                 else:
-                    if score < 100: score -= 10
-                    warning = f"⚠️ 수축기 거래량 미감소 ({vol_pct:.1f}%)"
-            
+                    # 주도주는 거래량이 조금 있어도 매집으로 간주 (면죄부)
+                    if rs_val >= 90 or market_cap > 10_000_000_000_000:
+                        pass
+                    else:
+                        if score < 100: score -= 10
+                        warnings.append(f"⚠️ 수축기 거래량 미감소 ({vol_pct:.1f}%)")
+
+            latest = hist.iloc[-1] if len(hist) else None
+            if latest is not None:
+                today_high = float(latest.get("high", 0) or 0)
+                today_close = float(latest.get("close", 0) or 0)
+                if today_high > 0:
+                    close_retreat = (today_high - today_close) / today_high
+                    if close_retreat >= 0.03:
+                        score -= 10
+                        warnings.append(f"⚠️ 장중 고점 대비 종가 -{close_retreat * 100:.1f}% 후퇴")
+
+                if len(hist) >= 21:
+                    prev_close = float(hist["close"].iloc[-2] or 0) if len(hist) >= 2 else 0
+                    avg_volume = float(hist["volume"].iloc[-21:-1].mean() or 0)
+                    today_volume = float(latest.get("volume", 0) or 0)
+                    change_pct = ((today_close / prev_close) - 1.0) if prev_close > 0 else 0
+                    if change_pct >= 0.10 and avg_volume > 0 and today_volume >= avg_volume * 3:
+                        warnings.append("⚡ 급등 + 거래량 폭증")
+                    elif change_pct <= -0.10 and avg_volume > 0 and today_volume >= avg_volume * 3:
+                        warnings.append("⚠️ 급락 + 거래량 폭증")
+            else:
+                change_pct = 0.0
+
+            # [추가] 급등 피로도(Exhaustion) 체크
+            # 최근 120일 저점 대비 현재가가 너무 높으면 '피로도' 경고 추가
+            if len(hist) >= 60:
+                low_120 = hist["low"].iloc[-120:].min() if len(hist) >= 120 else hist["low"].min()
+                rally_ratio = (today_close / low_120 - 1.0) * 100
+                if rally_ratio > 100: # 120일 내 100% 이상 급등 시
+                    warnings.append(f"⚠️ 급등 피로도 ({rally_ratio:.0f}%↑)")
+                    if score >= 100: score -= 10 # Tier 1 방어 (무분별한 추격 매수 방지)
+
             row_dict = row.to_dict()
-            row_dict["vcp_score"] = min(100, score)
+            row_dict["vcp_score"]   = max(0, min(100, score))
+            row_dict["change_pct"]  = round(change_pct, 4)   # 당일 등락률 (소수, 0.15 = +15%)
             
             # 정보 통합
+            warning = " | ".join(warnings)
             full_info = f"{vcp_info} | {warning}" if warning else vcp_info
             if is_reverse:
                 full_info = f"⚠️ 역수축 경고! {full_info}"
