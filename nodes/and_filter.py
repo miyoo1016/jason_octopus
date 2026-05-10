@@ -24,5 +24,12 @@ class AndFilterNode(BaseNode):
         result = valid[0]
         for other in valid[1:]:
             common = set(result["code"]) & set(other["code"])
-            result = result[result["code"].isin(common)].reset_index(drop=True)
+            
+            # [수정] 정밀 분석 모드에서 교집합이 깨질 경우 (한쪽 노드 데이터 누락 등) 합집합으로 폴백
+            if not common and context.is_single_analysis:
+                import logging
+                logging.getLogger(__name__).warning("AndFilterNode: 정밀 분석 중 교집합 공집합 발생 -> 합집합 폴백")
+                result = pd.concat([result, other], ignore_index=True).drop_duplicates("code")
+            else:
+                result = result[result["code"].isin(common)].reset_index(drop=True)
         return result

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,6 +26,7 @@ from google import genai
 from google.genai import types as genai_types
 
 from backend.config import settings
+from backend.alphaforge_policy import default_stock_analysis_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,7 @@ _PRICE_OUTPUT_PER_1M = 0.300
 # ── 재시도 설정 ───────────────────────────────────────────────────────────────
 _MAX_ATTEMPTS = 3
 _RETRY_WAIT_S = 1.0
+_API_TIMEOUT_S = 20
 
 
 @dataclass
@@ -73,6 +76,18 @@ class GeminiUsage:
 def _make_client() -> genai.Client:
     """Gemini 클라이언트 생성. 테스트 시 monkeypatch 대상."""
     return genai.Client(api_key=settings.gemini_api_key)
+
+
+def _generate_content_with_timeout(client: genai.Client, timeout_s: int = _API_TIMEOUT_S, **kwargs):
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(client.models.generate_content, **kwargs)
+        return future.result(timeout=timeout_s)
+    except TimeoutError as exc:
+        future.cancel()
+        raise TimeoutError(f"Gemini API timeout after {timeout_s}s") from exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _parse_json_response(text: str) -> dict | list:
@@ -172,7 +187,8 @@ def gemini_chat(
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         usage.attempts = attempt
         try:
-            response = client.models.generate_content(
+            response = _generate_content_with_timeout(
+                client,
                 model=settings.gemini_model,
                 contents=full_user,
                 config=config,
@@ -242,11 +258,7 @@ def gemini_analyze_stocks(
         (results, usages) — AI 분석 필드가 추가된 딕셔너리 리스트, 호출별 GeminiUsage 리스트
     """
     if system_prompt is None:
-        system_prompt = (
-            "당신은 한국 주식 시장 전문 애널리스트입니다. "
-            "제공된 종목 정보를 바탕으로 간결하고 정확한 투자 참고 분석을 제공합니다. "
-            "투자 권유가 아닌 참고 정보임을 명심하세요."
-        )
+        system_prompt = default_stock_analysis_prompt()
 
     results: list[dict[str, Any]] = []
     usages:  list[GeminiUsage]    = []
@@ -313,11 +325,7 @@ def gemini_analyze_stocks_with_key(
     model_id = "gemini-2.5-flash"
 
     if system_prompt is None:
-        system_prompt = (
-            "당신은 한국 주식 시장 전문 애널리스트입니다. "
-            "제공된 종목 정보를 바탕으로 간결하고 정확한 투자 참고 분석을 제공합니다. "
-            "투자 권유가 아닌 참고 정보임을 명심하세요."
-        )
+        system_prompt = default_stock_analysis_prompt()
 
     comments: dict[str, dict] = {}
     total_cost_usd = 0.0
@@ -367,7 +375,8 @@ def gemini_analyze_stocks_with_key(
         resp = None
         for attempt in range(1, 4):
             try:
-                resp = client.models.generate_content(
+                resp = _generate_content_with_timeout(
+                    client,
                     model=model_id,
                     contents=user_prompt,
                     config=config,

@@ -41,6 +41,15 @@
             <button class="market-chip" data-market="KOSPI">KOSPI</button>
             <button class="market-chip" data-market="KOSDAQ">KOSDAQ</button>
           </div>
+          <div class="sort-row" style="margin-top:12px;">
+            <span class="sort-label">분석 종목 수</span>
+            <select id="maxSymbols">
+              <option value="30" selected>30개 빠른 진단</option>
+              <option value="100">100개</option>
+              <option value="300">300개</option>
+              <option value="0">전체</option>
+            </select>
+          </div>
           <div class="search-divider">OR</div>
           <div class="stock-search-wrap">
             <input type="text" id="targetStock" placeholder="종목명 또는 코드 입력 (예: 삼성전자)">
@@ -99,7 +108,7 @@
         <div class="card-body">
           <div class="ai-provider-row">
             <button class="provider-btn active" data-provider="gemini">Gemini Flash</button>
-            <button class="provider-btn" data-provider="claude">Claude Haiku</button>
+            <button class="provider-btn" data-provider="claude" disabled title="AlphaForge v1.2 정책상 무료 티어 호환 Gemini만 사용합니다.">Claude Haiku</button>
           </div>
           <div class="ai-key-wrap">
             <input type="password" id="aiApiKey" placeholder="API 키를 입력하세요..." autocomplete="off">
@@ -125,11 +134,11 @@
         </div>
         <div class="stat-card green">
           <div class="stat-value" id="statFiltered">—</div>
-          <div class="stat-label">통과 종목</div>
+          <div class="stat-label">분류 완료</div>
         </div>
         <div class="stat-card blue">
           <div class="stat-value" id="statRate">—</div>
-          <div class="stat-label">필터링률</div>
+          <div class="stat-label">중간 필터 제거율</div>
         </div>
         <div class="stat-card purple">
           <div class="stat-value" id="statLatency">—</div>
@@ -145,6 +154,11 @@
             <span class="results-count" id="resultCount">0개</span>
           </div>
           <div class="results-actions">
+            <div class="cap-filter-group" id="capFilterGroup">
+              <button class="cap-btn active" data-cap="all">전체</button>
+              <button class="cap-btn" data-cap="large">대형주 (1조↑)</button>
+              <button class="cap-btn" data-cap="small">중소형주 (1조↓)</button>
+            </div>
             <button class="tb-btn" id="btnCopyAll" onclick="copyAll()">📋 전체 복사</button>
             <button class="tb-btn" onclick="exportCSV()">📥 CSV 다운로드</button>
           </div>
@@ -157,6 +171,31 @@
               <div class="empty-desc">왼쪽에서 원하는 필터를 체크하고 ▶ 분석 실행 버튼을 누르세요</div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- 실전 타율 추적 테이블 -->
+      <div class="perf-panel" id="perfPanel">
+        <div class="perf-header">
+          <span class="perf-title">📊 실전 타율 추적</span>
+          <span class="perf-updated" id="perfUpdated"></span>
+          <button class="tb-btn" id="btnPerfUpdate" onclick="updatePerformance()">🔄 수익률 갱신</button>
+        </div>
+        <div class="perf-summary" id="perfSummary">
+          <!-- JS가 채움 -->
+        </div>
+        <div class="perf-table-wrap">
+          <table class="perf-table" id="perfTable">
+            <thead>
+              <tr>
+                <th>날짜</th><th>종목</th><th>Tier</th><th>총점</th>
+                <th>진입가</th><th>익일수익</th><th>5일수익</th>
+              </tr>
+            </thead>
+            <tbody id="perfTableBody">
+              <tr><td colspan="7" class="perf-empty">타율 데이터 없음 — 갱신 버튼을 누르세요</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </section>
@@ -172,70 +211,59 @@
   <script>
     function copyAll() {
       if (!state.results) return alert('먼저 분석을 실행하세요.');
-      const nr = state.results.node_results;
+      const nr = state.results.node_results || {};
       const nodeIds = Object.keys(nr);
-      const last = nr[nodeIds[nodeIds.length - 1]];
-      if (!last || !last.data?.length) return alert('복사할 데이터가 없습니다.');
+      if (!nodeIds.length) return alert('데이터가 없습니다.');
+
+      const structuredRows = typeof collectStructuredRows === 'function' ? collectStructuredRows(state.results) : [];
+      const data = structuredRows.length ? structuredRows : (nr[nodeIds[nodeIds.length - 1]]?.data || []);
+
+      if (!data.length) return alert('복사할 데이터가 없습니다.');
 
       const enabled = Array.from(state.enabledSignals);
-
-      // ── 전략 맥락 헤더 ──
       const today = new Date().toISOString().slice(0, 10);
-      const signalDescs = enabled.map(sigId => {
-        const sig = SIGNALS.find(s => s.id === sigId);
-        const meta = SIGNAL_META[sigId];
-        if (!sig) return sigId;
-        const params = sig.params.map(p => {
-          const val = state.signalParams[sigId]?.[p.key] ?? p.default;
-          return `${p.label}=${val}`;
-        }).join(', ');
-        return `${sig.name}${params ? ' (' + params + ')' : ''}`;
-      });
-
-      const univNode = Object.values(nr).find(n => n.total_count > 1000);
-      const totalUniverse = univNode ? univNode.total_count : '─';
-      const totalResult = last.total_count || last.data.length;
-
-      const firstRow = last.data[0] || {};
-      const macroVix = firstRow.macro_vix ? parseFloat(firstRow.macro_vix).toFixed(2) : "N/A";
-      const macroWarning = firstRow.macro_warning ? ` -> 🚨 매수 차단 경고: ${firstRow.macro_warning}` : "";
-      const sp500Trend = firstRow.sp500_200ma_up === true ? "200일선 위 (우상향)" : (firstRow.sp500_200ma_up === false ? "200일선 아래 (우하향)" : "N/A");
 
       const header = [
-        `[시스템 분석 요약]`,
+        `[AlphaForge 시스템 분석 요약]`,
         `분석 일자: ${today}`,
         `대상 시장: ${state.market}`,
-        `거시 위험도(VIX): ${macroVix}${macroWarning}`,
-        `S&P500 추세: ${sp500Trend}`,
+        `분석 종목: ${data.length}건`,
         ``,
-        `[종목 상세]`,
+        `[종목 상세 리스트]`,
       ].join('\n');
 
-      const rows = last.data.map((row, i) => {
-        let vcpWarn = row.vcp_warning ? ` (경고: ${row.vcp_warning})` : "";
-        let boWarn = row.box_breakout_warning ? ` (경고: ${row.box_breakout_warning})` : "";
-        
-        let sp500Warn = "";
-        if (row.tier === 1 && row.sp500_200ma_up === false) {
-          sp500Warn = " ⚠️ S&P500 200일선 아래입니다. Tier 1이지만 비중 조절을 권장합니다.";
-        }
-        
-        let mc = row.market_cap ? Math.round(row.market_cap / 100000000).toLocaleString() + "억원" : "N/A";
-        
+      const rows = data.map((row, i) => {
+        const bucket = getPrimaryBucket(row);
+        const watchAlert = typeof getWatchAlertText === 'function' ? getWatchAlertText(row) : "";
+        const scoreInfo = getScoreInfo(row, state.results);
+
+        const displayReasons = getReasonList(row, 'display_promotion_reasons');
+        const rejectedReasons = typeof getDisplayRejectedReasons === 'function' ? getDisplayRejectedReasons(row) : getReasonList(row, 'display_rejected_reasons');
+        const promotionReasons = bucket === 'REJECTED' ? rejectedReasons : (displayReasons.length ? displayReasons : getReasonList(row, 'promotion_reasons'));
+        const promo = promotionReasons.join('; ') || (bucket === 'REJECTED' ? '세부 제외 사유 미기록' : '없음');
+        const displayDown = getReasonList(row, 'display_restriction_reasons');
+        const down = (displayDown.length ? displayDown : getReasonList(row, 'downgrade_reasons')).join('; ') || '없음';
+        const promoLabel = bucket.startsWith('TIER') ? '승격 사유'
+          : (bucket === 'WATCHLIST' || bucket === 'CRISIS_HOLD') ? '관찰 사유'
+          : '제외 사유';
+
+        const mc = formatCap(row.market_cap);
+        const flowText = row.flow_total_score != null ? row.flow_total_score : (row.flow_score ?? '-');
+
         return [
-          `종목명: ${row.name || ''} (${row.code || ''})`,
-          `섹터: ${row.sector || '기타'}`,
-          `시가총액: ${mc}`,
-          `총점: ${row.total_score || 0} / 210 (Tier ${row.tier || 3})${sp500Warn}`,
-          `- VCP 점수: ${row.vcp_score || 0}${vcpWarn}`,
-          `- 돌파 등급: ${row.box_breakout_grade || 'D'}${boWarn}`,
-          `- RS 백분위: ${row.rs_rating || 0} (점수: ${row.rs_score || 0})`,
-          `- 수급 점수: ${row.flow_score || 0} (외국인 순매수: ${row.foreign_net_buy || 0}, 기관 순매수: ${row.institution_net_buy || 0})`,
+          `${i + 1}. ${row.name || ''} (${row.code || ''}) ${watchAlert}`,
+          `   - 분류: ${bucket} | ${row.tier_reason || ''}`,
+          `   - 총점: ${scoreInfo.totalScore} / ${scoreInfo.scoreMax} (Tier ${row.tier || '-'})`,
+          `   - ${promoLabel}: ${promo}`,
+          `   - 제한 사유: ${down}`,
+          `   - 지표: RS ${row.rs_rating || 0}, VCP ${row.vcp_score || 0}, 수급 ${flowText}`,
+          `   - VCP 진단: ${row.vcp_diagnostic || `raw ${row.vcp_raw_score ?? '-'} → effective ${row.vcp_effective_score ?? '-'} → display ${row.vcp_display_score ?? row.vcp_score ?? '-'}`}`,
+          `   - 시총: ${mc} | 섹터: ${row.sector || '기타'}`,
           `--------------------------------------------------------`
         ].join('\n');
       });
 
-      const text = header + rows.join('\n');
+      const text = header + '\n' + rows.join('\n');
 
       navigator.clipboard.writeText(text).then(() => {
         const btn = document.getElementById('btnCopyAll');
@@ -246,13 +274,41 @@
 
     function exportCSV() {
       if (!state.results) return alert('먼저 분석을 실행하세요.');
-      const nr = state.results.node_results;
-      const last = nr[Object.keys(nr).pop()];
-      if (!last || !last.data?.length) return;
-      const cols = last.columns || Object.keys(last.data[0]);
+      const nr = state.results.node_results || {};
+      const nodeIds = Object.keys(nr);
+      if (!nodeIds.length) return;
+
+      const structuredRows = typeof collectStructuredRows === 'function' ? collectStructuredRows(state.results) : [];
+      const data = structuredRows.length ? structuredRows : (nr[nodeIds[nodeIds.length - 1]]?.data || []);
+      if (!data.length) return;
+
+      const priorityCols = [
+        "code", "name", "primary_bucket", "watchlist_flag", "watch_alert_type", "display_watch_alert_type",
+        "action_alert_flag", "tier", "total_score", "score_max",
+        "tier_reason", "display_promotion_reasons", "display_rejected_reasons", "promotion_reasons", "rejected_reasons",
+        "display_restriction_reasons", "downgrade_reasons", "sector", "market_cap",
+        "vcp_score", "vcp_raw_score", "vcp_effective_score", "vcp_display_score", "vcp_status", "vcp_confidence",
+        "vcp_cross_warning", "vcp_penalty_reasons", "candidate_confidence", "vcp_diagnostic",
+        "vcp_warning", "breakout_status", "box_breakout_grade",
+        "rs_rating", "flow_total_score", "foreign_net_buy", "institution_net_buy"
+      ];
+
+      const firstRow = data[0];
+      const allCols = Object.keys(firstRow);
+      const cols = priorityCols.filter(c => allCols.includes(c));
+      allCols.forEach(c => { if (!cols.includes(c)) cols.push(c); });
+
       let csv = '\uFEFF' + cols.join(',') + '\n';
-      last.data.forEach(r => {
-        csv += cols.map(c => r[c] ?? '').join(',') + '\n';
+      data.forEach(r => {
+        csv += cols.map(c => {
+          let val = r[c] ?? '';
+          if (Array.isArray(val)) val = val.join('; ');
+          val = String(val);
+          if (val.includes(',') || val.includes('\n') || val.includes('"')) {
+            val = `"${val.replace(/"/g, '""')}"`;
+          }
+          return val;
+        }).join(',') + '\n';
       });
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const a = document.createElement('a');

@@ -13,9 +13,9 @@ class MaAlignmentParams(BaseModel):
 class MaAlignmentNode(BaseNode):
     NODE_TYPE      = "ma_alignment"
     DISPLAY_NAME   = "이평선 정배열 찾기"
-    DESCRIPTION    = "단기(5) > 중기(20) > 장기(60) 이동평균선 정배열 종목 필터."
+    DESCRIPTION    = "단기(5) > 중기(20) > 장기(60) 이동평균선 정렬 상태를 표시합니다."
     INPUT_ARITY    = 1
-    OUTPUT_COLUMNS = ()
+    OUTPUT_COLUMNS = ("ma_alignment_flag", "ma_alignment_score")
     ParamsModel    = MaAlignmentParams
 
     def run(self, inputs: list[pd.DataFrame], params: MaAlignmentParams, context: ExecutionContext) -> pd.DataFrame:
@@ -29,9 +29,19 @@ class MaAlignmentNode(BaseNode):
         # OHLCV 배치 조회
         ohlcv_dict = context.krx_client.get_ohlcv_batch(codes, start_date, context.as_of_date)
         
-        valid_codes = set()
-        for code, hist in ohlcv_dict.items():
-            if hist.empty or len(hist) < 60:
+        results = []
+        for _, row in df.iterrows():
+            code = row["code"]
+            hist = ohlcv_dict.get(code)
+            row_dict = row.to_dict()
+            if hist is None or hist.empty or len(hist) < 60:
+                # [FIX] DATA_MISSING은 판단 보류 — 50점 가산 금지 (None 처리)
+                row_dict["ma_alignment_flag"] = "DATA_MISSING"
+                row_dict["ma_alignment_score"] = None
+                row_dict["ma_alignment_warning"] = (
+                    f"이평선 가격 데이터 부족 (OHLCV {0 if hist is None else len(hist)}개 < 60개)"
+                )
+                results.append(row_dict)
                 continue
             assert_no_future_data(hist, context.as_of_date, context=f"MaAlignmentNode:{code}")
 
@@ -47,9 +57,10 @@ class MaAlignmentNode(BaseNode):
             
             is_aligned = (not pd.isna(ma5) and not pd.isna(ma20) and not pd.isna(ma60) and ma5 > ma20 > ma60)
             
-            # [개선] 정밀 분석 모드면 정배열 여부 상관없이 통과
-            if is_aligned or context.is_single_analysis:
-                valid_codes.add(code)
-                
-        result = df[df["code"].isin(valid_codes)].reset_index(drop=True)
-        return result
+            row_dict["ma_alignment_flag"] = "ALIGNED" if is_aligned else "NOT_ALIGNED"
+            row_dict["ma_alignment_score"] = 50 if is_aligned else 20
+            if not is_aligned:
+                row_dict["ma_alignment_warning"] = "이평선 정배열 아님"
+            results.append(row_dict)
+
+        return pd.DataFrame(results)

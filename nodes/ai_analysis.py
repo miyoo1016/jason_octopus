@@ -5,6 +5,7 @@ from typing import Any
 import pandas as pd
 from pydantic import BaseModel
 from engine.node_base import BaseNode, ExecutionContext
+from backend.alphaforge_policy import build_ai_system_prompt
 from llm.gemini import gemini_analyze_stocks
 
 class AiAnalysisParams(BaseModel):
@@ -27,7 +28,11 @@ class AiAnalysisNode(BaseNode):
         # DataFrame을 딕셔너리 리스트로 변환
         stocks = df.to_dict(orient="records")
         
-        system_prompt = params.system_prompt if params.system_prompt else None
+        system_prompt = (
+            params.system_prompt
+            if params.system_prompt
+            else build_ai_system_prompt(as_of_date=context.as_of_date, signal_names=["AlphaForge DAG factors"])
+        )
         
         # 분석 수행
         analyzed_stocks, usages = gemini_analyze_stocks(

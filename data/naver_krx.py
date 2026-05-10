@@ -34,10 +34,22 @@ _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 # 재시도 가능한 HTTP 상태 코드
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _FLOW_BODY_LOG_LIMIT = 1200
+_NETWORK_UNAVAILABLE_UNTIL = 0.0
 
 
 class _RetryableHTTPError(Exception):
     """재시도 가능한 HTTP 오류."""
+
+
+def _network_unavailable() -> bool:
+    return time.time() < _NETWORK_UNAVAILABLE_UNTIL
+
+
+def _mark_network_unavailable(exc: Exception) -> None:
+    global _NETWORK_UNAVAILABLE_UNTIL
+    msg = str(exc)
+    if "Failed to resolve" in msg or "NameResolutionError" in msg or "nodename nor servname" in msg:
+        _NETWORK_UNAVAILABLE_UNTIL = time.time() + 60
 
 
 # 전역 캐시 (pykrx 데이터 중복 요청 방지)
@@ -49,6 +61,7 @@ _PYKRX_CACHE = {
 
 # [신규] OHLCV 메모리 캐시 (동일 실행 세션 내 중복 요청 방지)
 _OHLCV_MEM_CACHE = {}
+_UNIVERSE_MEM_CACHE = {} # [추가] 유니버스 메모리 캐시
 
 class NaverKRXClient:
     """네이버 증권 모바일 API 기반 데이터 클라이언트.
@@ -62,6 +75,11 @@ class NaverKRXClient:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": _UA})
+        # [성능] 동일 (codes_tuple, n_days, as_of_date) 키로 trend API 결과 캐시
+        # foreign_flow와 institution_flow가 같은 trend API를 두 번 호출하던 비효율 제거.
+        self._flow_batch_cache: dict[tuple, dict] = {}
+        # [진단] OHLCV 수집 결과 진단 (per-code source/rows/error)
+        self._ohlcv_diagnostics: dict[str, dict] = {}
 
     @retry(
         retry=retry_if_exception_type((_RetryableHTTPError, requests.ConnectionError, requests.Timeout)),
@@ -70,10 +88,16 @@ class NaverKRXClient:
         before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )
-    def _api_get(self, url: str, timeout: int = 10) -> Any:
+    def _api_get(self, url: str, timeout: tuple[int, int] = (3, 10)) -> Any:
         """공통 API GET 호출 + jitter 대기 + 재시도."""
+        if _network_unavailable():
+            raise RuntimeError("Network DNS unavailable; skipping external request")
         time.sleep(random.uniform(0.1, 0.3))  # jitter delay 증가
-        resp = self._session.get(url, timeout=timeout)
+        try:
+            resp = self._session.get(url, timeout=timeout)
+        except requests.ConnectionError as exc:
+            _mark_network_unavailable(exc)
+            raise RuntimeError(f"Network unavailable for {url[:80]}") from exc
         if resp.status_code in _RETRYABLE_STATUS:
             raise _RetryableHTTPError(f"HTTP {resp.status_code} for {url[:80]}...")
         resp.raise_for_status()
@@ -86,27 +110,29 @@ class NaverKRXClient:
         before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )
-    def _api_get_with_flow_trace(self, url: str, timeout: int = 10, *, code: str, page: int) -> Any:
+    def _api_get_with_flow_trace(self, url: str, timeout: tuple[int, int] = (3, 10), *, code: str, page: int) -> Any:
         """수급 API 호출 원문을 추적하며 재시도를 수행합니다."""
+        if _network_unavailable():
+            raise RuntimeError("Network DNS unavailable; skipping external request")
         parsed = urlparse(url)
         params = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed.query).items()}
         endpoint = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        
+
         # jitter delay: 50종목 이상 배치 시 더 긴 지연 부여
         time.sleep(random.uniform(0.2, 0.5))
-        
+
         try:
             resp = self._session.get(url, timeout=timeout)
         except requests.Timeout as exc:
             logger.warning("[수급 API 타임아웃] code=%s page=%s error=%s", code, page, exc)
             raise _RetryableHTTPError(f"Timeout for {url[:80]}")
         except requests.RequestException as exc:
+            _mark_network_unavailable(exc)
             logger.warning("[수급 API 요청 오류] code=%s page=%s error=%s", code, page, exc)
             raise
 
         body_sample = resp.text[:_FLOW_BODY_LOG_LIMIT]
-        print(f"[수급 API 응답] status_code={resp.status_code} body_200={resp.text[:200]}")
-        logger.info(
+        logger.debug(
             "[수급 API 응답] code=%s page=%s http_status=%s body_sample=%s",
             code,
             page,
@@ -125,11 +151,22 @@ class NaverKRXClient:
 
         cache_path = self._cache_dir / f"universe_{as_of_date}_{market}.parquet"
 
-        # 오늘 날짜면 실시간 데이터를 위해 캐시 우회
-        if as_of_date != today_str and cache_path.exists():
-            logger.info("유니버스 캐시 적중: %s", cache_path.name)
+        # 메모리 캐시 확인
+        mem_key = f"{as_of_date}_{market}"
+        if mem_key in _UNIVERSE_MEM_CACHE:
+            return _UNIVERSE_MEM_CACHE[mem_key]
+
+        # 오늘 날짜라도 디스크 캐시가 있으면 일단 사용 (정밀 분석 시 코드 매칭용으로 충분)
+        if cache_path.exists():
+            logger.info("유니버스 디스크 캐시 사용: %s", cache_path.name)
             df_cached = pd.read_parquet(cache_path)
-            return df_cached[df_cached["code"].str.match(r'^\d{6}$', na=False)].reset_index(drop=True)
+            res = df_cached[df_cached["code"].str.match(r'^\d{6}$', na=False)].reset_index(drop=True)
+            _UNIVERSE_MEM_CACHE[mem_key] = res
+            return res
+
+        # [최적화] manual_codes가 kw에 있을 경우 조기 종료용으로 활용
+        manual_codes = kw.get("manual_codes", [])
+        found_codes = set()
 
         markets = ["KOSPI", "KOSDAQ"] if market == "ALL" else [market]
         all_rows = []
@@ -163,13 +200,24 @@ class NaverKRXClient:
                 if len(stocks) < 100:
                     break
 
+                # [최적화] 필요한 종목을 모두 찾았으면 조기 종료
+                if manual_codes:
+                    current_page_codes = {s.get("itemCode") for s in stocks}
+                    found_codes.update(current_page_codes & set(manual_codes))
+                    if len(found_codes) >= len(manual_codes):
+                        logger.info("필요한 모든 종목을 찾았습니다. 페이징을 중단합니다. (Page %d)", page)
+                        break
+
             logger.info("%s 수집 완료: %d 종목", mkt, sum(1 for r in all_rows if r["market"] == mkt))
+            if manual_codes and len(found_codes) >= len(manual_codes):
+                break
 
         df = pd.DataFrame(all_rows)
         # 6자리 숫자 코드만 유지 (채권·파생·구조화상품 등 비표준 코드 제거)
         df = df[df["code"].str.match(r'^\d{6}$', na=False)].reset_index(drop=True)
         if len(df) > 0:
             df.to_parquet(cache_path, index=False)
+        _UNIVERSE_MEM_CACHE[mem_key] = df
         return df
 
     # ── 외국인/기관 수급 (공통 trend API) ──
@@ -179,7 +227,20 @@ class NaverKRXClient:
         n_days: int,
         as_of_date: str = "",
     ) -> dict[str, list[tuple[pd.Timestamp, int, int]]]:
-        """종목별 (날짜, 외국인 순매수, 기관 순매수) 리스트 병렬 반환."""
+        """종목별 (날짜, 외국인 순매수, 기관 순매수) 리스트 병렬 반환.
+
+        [성능] 동일한 (codes, n_days, as_of_date) 조합은 캐시에서 즉시 반환.
+        foreign_flow와 institution_flow가 같은 trend API를 중복 호출하던 6초+6초=12초 낭비 제거.
+        """
+        # 캐시 키 — 종목 순서 무관하게 동작하도록 정렬
+        cache_key = (tuple(sorted(codes[:150])), int(n_days), as_of_date)
+        if cache_key in self._flow_batch_cache:
+            logger.info("[수급 캐시 HIT] codes=%d n_days=%d as_of=%s — API 재호출 생략",
+                        len(codes), n_days, as_of_date)
+            cached = self._flow_batch_cache[cache_key]
+            # diagnostics는 매번 새로 복사 (mutate 방지)
+            return {k: v for k, v in cached.items()}
+
         from concurrent.futures import ThreadPoolExecutor
         as_of_ts = pd.to_datetime(as_of_date) if as_of_date else None
         pages_needed = (n_days + 30) // 60 + 1
@@ -189,6 +250,17 @@ class NaverKRXClient:
         target_biz = as_of_date.replace("-", "") if as_of_date else ""
 
         def _fetch_single(code):
+            if _network_unavailable():
+                return code, [], {
+                    "source": "naver_trend",
+                    "api_error": "Network DNS unavailable",
+                    "zero_reason": "API_TIMEOUT_OR_ERROR",
+                    "latest_biz": None,
+                    "target_biz": target_biz,
+                    "response_rows": 0,
+                    "endpoint": f"https://m.stock.naver.com/api/stock/{code}/trend",
+                    "params": {"pageSize": 60},
+                }
             filtered = []
             diag = {
                 "source": "naver_trend",
@@ -203,9 +275,18 @@ class NaverKRXClient:
             try:
                 for page in range(1, pages_needed + 1):
                     url = f"https://m.stock.naver.com/api/stock/{code}/trend?page={page}&pageSize=60"
-                    rows = self._api_get_with_flow_trace(url, timeout=5, code=code, page=page)
-                    if not isinstance(rows, list):
-                        rows = rows.get("datas", [])
+                    rows_raw = self._api_get_with_flow_trace(url, timeout=(3, 10), code=code, page=page)
+                    rows = rows_raw
+                    if isinstance(rows, list):
+                        pass
+                    elif isinstance(rows, dict):
+                        # [개선] result.datas 또는 result.trend 구조까지 모두 확인
+                        rows = rows.get("datas") or rows.get("trend") or rows.get("priceInfos")
+                        if rows is None and "result" in rows_raw: # rows_raw is the original body
+                            res_obj = rows_raw.get("result", {})
+                            if isinstance(res_obj, dict):
+                                rows = res_obj.get("datas") or res_obj.get("trend") or res_obj.get("priceInfos")
+
                     if not rows:
                         break
                     diag["response_rows"] += len(rows)
@@ -215,8 +296,8 @@ class NaverKRXClient:
                         biz_ts = pd.to_datetime(biz, format="%Y%m%d")
                         if as_of_ts is not None and biz_ts > as_of_ts:
                             continue
-                        f_buy = _parse_signed(r.get("foreignerPureBuyQuant", "0"))
-                        o_buy = _parse_signed(r.get("organPureBuyQuant", "0"))
+                        f_buy = _parse_signed(r.get("foreignerPureBuyQuant", r.get("foreignerPureBuyQty", "0")))
+                        o_buy = _parse_signed(r.get("organPureBuyQuant", r.get("institutionPureBuyQuant", r.get("organPureBuyQty", "0"))))
                         if target_biz and biz == target_biz and f_buy == 0 and o_buy == 0:
                             logger.info(
                                 "[수급 0 판정] code=%s bizdate=%s reason=API_RESPONSE_ZERO foreignerPureBuyQuant=%r organPureBuyQuant=%r raw_row=%s",
@@ -255,7 +336,7 @@ class NaverKRXClient:
 
         # [안전장치] 최대 150종목으로 제한 (서버 부하 방지)
         codes = codes[:150]
-        
+
         with ThreadPoolExecutor(max_workers=5) as executor: # 워커 수 10 -> 5로 대폭 하향 (안정성 우선)
             results = list(executor.map(_fetch_single, codes))
             success_count = 0
@@ -264,11 +345,13 @@ class NaverKRXClient:
                 diagnostics[code] = diag
                 if not diag.get("api_error"):
                     success_count += 1
-            
-            logger.info("[수급 수집 리포트] 성공=%d/%d (성공률 %.1f%%)", 
+
+            logger.info("[수급 수집 리포트] 성공=%d/%d (성공률 %.1f%%)",
                         success_count, len(codes), (success_count/len(codes)*100 if codes else 0))
 
         out["_diagnostics"] = diagnostics  # type: ignore[assignment]
+        # [성능] 캐시 저장 — 같은 세션 내 두 번째 호출은 캐시 사용
+        self._flow_batch_cache[cache_key] = {k: v for k, v in out.items()}
         return out
 
     def get_foreign_flow(self, universe_df: pd.DataFrame, as_of_date: str, n_days: int = 5, **kw) -> pd.DataFrame:
@@ -319,12 +402,12 @@ class NaverKRXClient:
         df["flow_data_warning"] = "✅ 수급: 당일 실시간 반영"
         if fallback_codes:
             df.loc[df["code"].isin(fallback_codes), "flow_data_warning"] = "⚠️ 수급: 전일 기준 (당일 API 미집계)"
-        
+
         # 데이터가 아예 없는 경우 (NaN) 처리
         mask_nan = df["foreign_net_buy"].isna()
         if mask_nan.any():
             df.loc[mask_nan, "flow_data_warning"] = "⚠️ 수급 데이터: 장 마감 후 갱신"
-        
+
         df.attrs["foreign_flow_hist"] = flow
         df.attrs["foreign_flow_diagnostics"] = flow_diag
         return df
@@ -336,7 +419,7 @@ class NaverKRXClient:
         flow = self._fetch_flow_batch(codes, flow_days, as_of_date=as_of_date)
         flow_diag = flow.pop("_diagnostics", {})
         df = universe_df.copy()
-        
+
         from data.holidays import prev_trading_day as _prev_td_inst
         target_biz_inst = as_of_date.replace("-", "")
         prev_biz_inst   = _prev_td_inst(as_of_date).replace("-", "")
@@ -357,11 +440,11 @@ class NaverKRXClient:
         df["flow_data_warning"] = "✅ 수급: 당일 실시간 반영"
         if fallback_codes_inst:
             df.loc[df["code"].isin(fallback_codes_inst), "flow_data_warning"] = "⚠️ 수급: 전일 기준 (당일 API 미집계)"
-            
+
         mask_nan_inst = df["institution_net_buy"].isna()
         if mask_nan_inst.any():
             df.loc[mask_nan_inst, "flow_data_warning"] = "⚠️ 수급 데이터: 장 마감 후 갱신"
-        
+
         df.attrs["institution_flow_hist"] = flow
         df.attrs["institution_flow_diagnostics"] = flow_diag
         return df
@@ -410,8 +493,8 @@ class NaverKRXClient:
         start_ts = pd.to_datetime(start_date) if start_date else None
         today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
 
-        # end_date가 지정된 경우 캐시 사용 (오늘 포함 — 동일 파이프라인 내 반복 수집 방지)
-        use_cache = bool(end_date) and end_date <= today_str
+        # end_date가 지정된 경우 캐시 사용 (오늘 제외 — 실시간/당일 데이터는 항상 최신화)
+        use_cache = bool(end_date) and end_date < today_str
         cache_path = (self._cache_dir / f"ohlcv_{code}_{end_date}_{pages}.parquet") if use_cache else None
 
         if use_cache and cache_path is not None and cache_path.exists():
@@ -437,28 +520,53 @@ class NaverKRXClient:
             # [최적화] pageSize 60 -> 120 (요청 횟수 절반 감소)
             p_size = 120
             p_count = (pages * 60 + p_size - 1) // p_size
-            
+
             for page in range(1, p_count + 1):
                 url = (
                     f"https://m.stock.naver.com/api/stock/{code}/price"
                     f"?page={page}&pageSize={p_size}"
                 )
                 try:
-                    body = self._api_get(url, timeout=5)
+                    body = self._api_get(url, timeout=(3, 10))
                 except Exception:
                     break
 
-                prices = body if isinstance(body, list) else body.get("datas", body.get("priceInfos", []))
+                # [개선] 네이버 모바일 API의 다양한 응답 구조 대응 (datas, priceInfos, result.priceInfos 등)
+                if isinstance(body, list):
+                    prices = body
+                else:
+                    # [주의] body가 dict임을 보장하고 keys() 확인
+                    prices = body.get("datas") or body.get("priceInfos")
+                    if prices is None and "result" in body:
+                        res_obj = body.get("result", {})
+                        if isinstance(res_obj, dict):
+                            prices = res_obj.get("priceInfos") or res_obj.get("datas")
+                    if prices is None and "datas" not in body and "priceInfos" not in body:
+                        # [Fallback] 만약 body 자체가 결과 객체인 경우 (드문 케이스)
+                        prices = body.get("items") or body.get("list")
+
                 if not isinstance(prices, list) or not prices:
+                    # trend API는 수급 전용 — OHLCV 폴백으로 사용하면 close=0 오염 발생.
+                    # price API가 빈 응답이면 그대로 루프 종료 (pykrx 폴백은 아래에서 처리).
+                    logger.debug("OHLCV price API 응답 없음 (code=%s, page=%d) — 페이징 중단", code, page)
                     break
 
                 for p in prices:
+                    dt_val = str(p.get("localTradedAt", p.get("date", "")))[:10]
+                    if len(dt_val) == 8:  # YYYYMMDD → YYYY-MM-DD
+                        dt_val = f"{dt_val[:4]}-{dt_val[4:6]}-{dt_val[6:]}"
+
+                    close_val = _parse_int(p.get("closePrice", p.get("close", 0)))
+                    if close_val == 0:
+                        # closePrice=0 행은 파싱 실패 또는 잘못된 소스 — 건너뜀
+                        continue
+
                     rows.append({
-                        "date":   str(p.get("localTradedAt", p.get("date", "")))[:10],
+                        "date":   dt_val,
                         "open":   _parse_int(p.get("openPrice",  p.get("open",   0))),
                         "high":   _parse_int(p.get("highPrice",  p.get("high",   0))),
                         "low":    _parse_int(p.get("lowPrice",   p.get("low",    0))),
-                        "close":  _parse_int(p.get("closePrice", p.get("close",  0))),
+                        "close":  close_val,
                         "volume": _parse_int(p.get("accumulatedTradingVolume", p.get("volume", 0))),
                     })
 
@@ -468,6 +576,38 @@ class NaverKRXClient:
                         break
 
             if not rows:
+                # ── pykrx 폴백: Naver price API가 완전히 빈 경우 ──────────────────
+                # trend API는 수급 전용이므로 OHLCV 폴백으로 절대 사용하지 않음.
+                # pykrx는 일자별 전체 시장 OHLCV를 제공하므로 단일 종목 조회에도 활용 가능.
+                if _network_unavailable():
+                    return pd.DataFrame()
+                try:
+                    from pykrx import stock as _pykrx_stock
+                    from data.holidays import to_krx_date as _to_krx
+                    # end_date 기준 약 pages×60 영업일 전부터 수집
+                    import datetime as _dt
+                    _end_d   = pd.to_datetime(end_date) if end_date else pd.Timestamp.now()
+                    _start_d = _end_d - _dt.timedelta(days=pages * 60 * 7 // 5 + 30)
+                    _sd_str  = _start_d.strftime("%Y%m%d")
+                    _ed_str  = _end_d.strftime("%Y%m%d")
+                    _pkdf = _pykrx_stock.get_market_ohlcv_by_date(_sd_str, _ed_str, code)
+                    if _pkdf is not None and not _pkdf.empty:
+                        _pkdf = _pkdf.rename(columns={
+                            "시가": "open", "고가": "high", "저가": "low",
+                            "종가": "close", "거래량": "volume",
+                        })
+                        _pkdf = _pkdf[["open", "high", "low", "close", "volume"]]
+                        _pkdf.index = pd.to_datetime(_pkdf.index)
+                        _pkdf = _pkdf[_pkdf["close"] > 0]
+                        if not _pkdf.empty:
+                            logger.info("OHLCV pykrx 폴백 성공 (code=%s, 행수=%d)", code, len(_pkdf))
+                            if end_ts:
+                                _pkdf = _pkdf[_pkdf.index <= end_ts]
+                            if start_ts:
+                                _pkdf = _pkdf[_pkdf.index >= start_ts]
+                            return _pkdf
+                except Exception as _pk_e:
+                    logger.warning("OHLCV pykrx 폴백 실패 (code=%s): %s", code, _pk_e)
                 return pd.DataFrame()
 
             df = pd.DataFrame(rows)
@@ -486,7 +626,7 @@ class NaverKRXClient:
 
             if start_ts:
                 df = df[df.index >= start_ts]
-            
+
             # 메모리 캐시에 보관
             _OHLCV_MEM_CACHE[cache_key] = df
             return df
@@ -495,29 +635,101 @@ class NaverKRXClient:
             return pd.DataFrame()
 
     def get_ohlcv_batch(self, codes: list[str], start_date: str = "", end_date: str = "", pages: int = 3, **kw) -> dict[str, pd.DataFrame]:
-        """종목별 OHLCV를 고속 병렬로 수집합니다."""
+        """종목별 OHLCV를 고속 병렬로 수집합니다.
+
+        [진단] self._ohlcv_diagnostics에 종목별 source/rows/error 기록.
+        VCP/box_breakout/ma_alignment/rs_rating 등 모든 OHLCV 소비 노드가 공유하는 단일 진단 채널.
+        """
         # [안전장치] 한 번에 최대 200종목까지만 배치 조회 허용
         codes = codes[:200]
         from concurrent.futures import ThreadPoolExecutor
 
-        results = {}
+        results: dict[str, pd.DataFrame] = {}
         def _fetch_one(code):
+            diag = {
+                "ohlcv_rows": 0,
+                "ohlcv_start_date": start_date,
+                "ohlcv_end_date": end_date,
+                "ohlcv_fetch_status": "OK",
+                "ohlcv_error": None,
+                "price_data_source": None,  # naver_price | pykrx_fallback | none
+            }
             try:
-                # 지정된 페이지 수만큼만 수집 (기본 3페이지=180일)
                 df = self.get_ohlcv(code, start_date=start_date, end_date=end_date, pages=pages)
-                if not df.empty:
-                    return code, df
+                if df is not None and not df.empty:
+                    diag["ohlcv_rows"] = len(df)
+                    # source 추정: pykrx 폴백은 컬럼명이 동일하지만 메모리 캐시 키 일치 여부로 구분 어려움.
+                    # 보수적으로 "naver_price"로 표시, 0행이면 명시적 폴백 시도 결과로 표시.
+                    diag["price_data_source"] = "naver_price_or_pykrx"
+                    return code, df, diag
+                diag["ohlcv_fetch_status"] = "EMPTY"
+                diag["ohlcv_error"] = "naver_price + pykrx 모두 빈 응답"
+                diag["price_data_source"] = "none"
+                return code, pd.DataFrame(), diag
             except Exception as e:
                 logger.debug(f"Batch OHLCV 수집 실패 ({code}): {e}")
-            return code, pd.DataFrame()
+                diag["ohlcv_fetch_status"] = "ERROR"
+                diag["ohlcv_error"] = str(e)[:200]
+                diag["price_data_source"] = "none"
+                return code, pd.DataFrame(), diag
 
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            task_results = executor.map(_fetch_one, codes)
-            for code, df in task_results:
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            task_results = list(executor.map(_fetch_one, codes))
+            for code, df, diag in task_results:
+                self._ohlcv_diagnostics[code] = diag
                 if not df.empty:
                     results[code] = df
 
+        # 결측 분포 로그 (50% 이상 0행이면 WARNING)
+        missing = sum(1 for c in codes if c not in results)
+        if codes and missing / len(codes) >= 0.5:
+            logger.warning(
+                "[OHLCV 결측 경고] 요청 %d개 중 %d개 빈 응답 (%.0f%%) — naver_price API 또는 pykrx 폴백 점검 필요",
+                len(codes), missing, missing / len(codes) * 100,
+            )
+
         return results
+
+    def get_ohlcv_diagnostics(self, codes: list[str] | None = None) -> dict:
+        """OHLCV 수집 진단 정보를 반환합니다.
+
+        반환 구조:
+            {
+                "per_code": { "005930": { "ohlcv_rows": 130, "ohlcv_fetch_status": "OK", ... } },
+                "summary": {
+                    "total": 30,
+                    "ok_count": 0,
+                    "empty_count": 30,
+                    "error_count": 0,
+                    "ok_rate": 0.0,
+                    "missing_codes": ["005930", ...],
+                },
+            }
+        """
+        if codes is None:
+            per_code = dict(self._ohlcv_diagnostics)
+        else:
+            per_code = {c: self._ohlcv_diagnostics.get(c, {
+                "ohlcv_rows": 0, "ohlcv_fetch_status": "NOT_REQUESTED",
+                "ohlcv_error": None, "price_data_source": None,
+            }) for c in codes}
+
+        ok_count = sum(1 for d in per_code.values() if d.get("ohlcv_fetch_status") == "OK")
+        empty_count = sum(1 for d in per_code.values() if d.get("ohlcv_fetch_status") == "EMPTY")
+        error_count = sum(1 for d in per_code.values() if d.get("ohlcv_fetch_status") == "ERROR")
+        total = len(per_code)
+        missing_codes = [c for c, d in per_code.items() if d.get("ohlcv_fetch_status") != "OK"]
+        return {
+            "per_code": per_code,
+            "summary": {
+                "total": total,
+                "ok_count": ok_count,
+                "empty_count": empty_count,
+                "error_count": error_count,
+                "ok_rate": round(ok_count / total, 3) if total else 0.0,
+                "missing_codes": missing_codes[:30],  # 최대 30개만
+            },
+        }
 
 
 def _parse_int(s) -> int:

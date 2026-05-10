@@ -17,17 +17,23 @@ _WICS_HEADERS = {
 }
 
 def _build_sector_map_from_naver() -> dict[str, str]:
-    """Naver WICS API로 전종목 섹터 맵 생성 후 data/krx_sector.csv에 저장."""
+    """Naver 업종 API로 전종목 섹터 맵 생성 후 data/krx_sector.csv에 저장.
+
+    NOTE: industryGroupCode=WICS 파라미터는 400 오류 유발 — 파라미터 없이 호출.
+    """
     base = "https://m.stock.naver.com/api/stocks/industry"
     try:
-        res = requests.get(f"{base}?industryGroupCode=WICS&page=1&pageSize=200",
-                           headers=_WICS_HEADERS, timeout=10)
+        # industryGroupCode 파라미터 제거 → 전체 업종 그룹 목록 반환
+        time.sleep(0.5)
+        res = requests.get(f"{base}?page=1&pageSize=200",
+                           headers=_WICS_HEADERS, timeout=(3, 10))
         res.raise_for_status()
         groups = res.json().get("groups", [])
     except Exception as e:
         logger.warning("WICS 업종 그룹 수집 실패: %s", e)
         return {}
 
+    logger.info("업종 그룹 %d개 수집 완료", len(groups))
     code_to_sector: dict[str, str] = {}
     for g in groups:
         industry_no = g.get("no") or g.get("industryGroupCode")
@@ -35,11 +41,13 @@ def _build_sector_map_from_naver() -> dict[str, str]:
         page = 1
         while True:
             try:
+                time.sleep(0.35)  # rate limit 방지 (0.05→0.35)
                 r2 = requests.get(f"{base}/{industry_no}?page={page}&pageSize=100",
-                                  headers=_WICS_HEADERS, timeout=8)
+                                  headers=_WICS_HEADERS, timeout=(3, 10))
                 r2.raise_for_status()
                 stocks = r2.json().get("stocks", [])
-            except Exception:
+            except Exception as e2:
+                logger.debug("업종 %s(%s) 종목 조회 실패: %s", industry_no, industry_name, e2)
                 break
             if not stocks:
                 break
@@ -50,7 +58,6 @@ def _build_sector_map_from_naver() -> dict[str, str]:
             if len(stocks) < 100:
                 break
             page += 1
-            time.sleep(0.05)
 
     if code_to_sector:
         try:

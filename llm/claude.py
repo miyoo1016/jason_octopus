@@ -35,7 +35,7 @@ def claude_analyze_stocks(
     except ImportError:
         raise ImportError("anthropic 패키지가 설치되어 있지 않습니다. pip install anthropic")
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key, timeout=20.0)
 
     if system_prompt is None:
         system_prompt = (

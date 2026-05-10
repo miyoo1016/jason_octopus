@@ -15,8 +15,8 @@ KRX 시세·수급 데이터 어댑터 (pykrx 래퍼).
     volume  int   거래량
 
 수급 컬럼 (foreign_flow, institution_flow 노드가 추가):
-    foreign_net_buy   int   외국인 N일 누적 순매수량 (주)
-    institution_net_buy int 기관 N일 누적 순매수량 (주)
+    foreign_net_buy   int | None   외국인 당일 순매수량 (주)
+    institution_net_buy int | None 기관 당일 순매수량 (주)
 
 사용법:
     from data.krx import KRXClient
@@ -190,29 +190,27 @@ class KRXClient:
         force_refresh: bool = False,
     ) -> pd.DataFrame:
         """
-        유니버스 전 종목의 외국인 N일 누적 순매수량을 universe에 합쳐 반환합니다.
+        유니버스 전 종목의 외국인 당일 순매수량을 universe에 합쳐 반환합니다.
 
         Args:
             universe:   get_universe() 반환 DataFrame
             as_of_date: 기준일 'YYYY-MM-DD'
-            n_days:     누적 기간 (기본 5거래일)
+            n_days:     호환성용 인자. 수집 기간은 항상 당일로 고정합니다.
 
         Returns:
             universe + foreign_net_buy 컬럼 추가된 DataFrame
         """
-        key = self._cache.make_key("foreign_flow", as_of_date, str(n_days))
+        key = self._cache.make_key("foreign_flow_daily", as_of_date)
 
         def fetch():
-            # N일 전 거래일 계산
-            start_date = prev_trading_day(as_of_date, n=n_days)
-            krx_start  = to_krx_date(start_date)
-            krx_end    = to_krx_date(as_of_date)
+            krx_start = to_krx_date(as_of_date)
+            krx_end = to_krx_date(as_of_date)
 
             all_rows = []
             for mkt in ["KOSPI", "KOSDAQ"]:
                 try:
                     df = pykrx_stock.get_market_net_purchases_of_equities_by_ticker(
-                        krx_start, krx_end, "외국인", mkt
+                        krx_start, krx_end, mkt, "외국인"
                     )
                     time.sleep(_CALL_DELAY_S)
 
@@ -243,18 +241,18 @@ class KRXClient:
             flow_df = pd.concat(all_rows)
             flow_df = flow_df.reset_index()
             flow_df["code"] = flow_df["code"].astype(str).str.zfill(6)
-            flow_df["foreign_net_buy"] = flow_df["foreign_net_buy"].fillna(0).astype(int)
+            flow_df["foreign_net_buy"] = pd.to_numeric(flow_df["foreign_net_buy"], errors="coerce").astype("Int64")
             return flow_df
 
         flow = self._cache.load_or_fetch(key, fetch, force_refresh=force_refresh)
 
         if "foreign_net_buy" not in flow.columns:
-            logger.warning("외국인 수급 데이터 없음 — 0으로 채웁니다.")
-            universe["foreign_net_buy"] = 0
+            logger.warning("외국인 수급 데이터 없음 — None으로 표시합니다.")
+            universe["foreign_net_buy"] = pd.Series([pd.NA] * len(universe), dtype="Int64")
             return universe
 
         merged = universe.merge(flow[["code", "foreign_net_buy"]], on="code", how="left")
-        merged["foreign_net_buy"] = merged["foreign_net_buy"].fillna(0).astype(int)
+        merged["foreign_net_buy"] = pd.to_numeric(merged["foreign_net_buy"], errors="coerce").astype("Int64")
         logger.info("외국인 수급 병합 완료: %d종목", len(merged))
         return merged
 
@@ -269,28 +267,27 @@ class KRXClient:
         force_refresh: bool = False,
     ) -> pd.DataFrame:
         """
-        유니버스 전 종목의 기관 N일 누적 순매수량을 universe에 합쳐 반환합니다.
+        유니버스 전 종목의 기관 당일 순매수량을 universe에 합쳐 반환합니다.
 
         Args:
             universe:   get_universe() 반환 DataFrame
             as_of_date: 기준일 'YYYY-MM-DD'
-            n_days:     누적 기간 (기본 5거래일)
+            n_days:     호환성용 인자. 수집 기간은 항상 당일로 고정합니다.
 
         Returns:
             universe + institution_net_buy 컬럼 추가된 DataFrame
         """
-        key = self._cache.make_key("institution_flow", as_of_date, str(n_days))
+        key = self._cache.make_key("institution_flow_daily", as_of_date)
 
         def fetch():
-            start_date = prev_trading_day(as_of_date, n=n_days)
-            krx_start  = to_krx_date(start_date)
-            krx_end    = to_krx_date(as_of_date)
+            krx_start = to_krx_date(as_of_date)
+            krx_end = to_krx_date(as_of_date)
 
             all_rows = []
             for mkt in ["KOSPI", "KOSDAQ"]:
                 try:
                     df = pykrx_stock.get_market_net_purchases_of_equities_by_ticker(
-                        krx_start, krx_end, "기관합계", mkt
+                        krx_start, krx_end, mkt, "기관합계"
                     )
                     time.sleep(_CALL_DELAY_S)
 
@@ -319,17 +316,18 @@ class KRXClient:
 
             flow_df = pd.concat(all_rows).reset_index()
             flow_df["code"] = flow_df["code"].astype(str).str.zfill(6)
-            flow_df["institution_net_buy"] = flow_df["institution_net_buy"].fillna(0).astype(int)
+            flow_df["institution_net_buy"] = pd.to_numeric(flow_df["institution_net_buy"], errors="coerce").astype("Int64")
             return flow_df
 
         flow = self._cache.load_or_fetch(key, fetch, force_refresh=force_refresh)
 
         if "institution_net_buy" not in flow.columns:
-            universe["institution_net_buy"] = 0
+            logger.warning("기관 수급 데이터 없음 — None으로 표시합니다.")
+            universe["institution_net_buy"] = pd.Series([pd.NA] * len(universe), dtype="Int64")
             return universe
 
         merged = universe.merge(flow[["code", "institution_net_buy"]], on="code", how="left")
-        merged["institution_net_buy"] = merged["institution_net_buy"].fillna(0).astype(int)
+        merged["institution_net_buy"] = pd.to_numeric(merged["institution_net_buy"], errors="coerce").astype("Int64")
         logger.info("기관 수급 병합 완료: %d종목", len(merged))
         return merged
 

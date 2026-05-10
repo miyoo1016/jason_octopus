@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 *.log
 .cache/
+data/cache/
+data/results/
+data/tracker/performance.json
 .env
 .pytest_cache/
 scratch/test_*

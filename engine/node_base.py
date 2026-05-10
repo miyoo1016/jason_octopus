@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import Any, Callable, ClassVar
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict
@@ -42,8 +42,8 @@ class ExecutionContext:
         as_of_date:   기준일 'YYYY-MM-DD' (모든 데이터 조회의 기준점)
         run_id:       실행 고유 ID (로깅·디버깅용)
         cache_dir:    결과 캐시 저장 경로 (노드가 임시 파일을 쓸 때 참조)
-        krx_client:   KRX 데이터 클라이언트 (소스 노드만 사용, 그 외 None 허용)
-        extras:       특수 노드를 위한 추가 자원 (LLM 클라이언트 등)
+    krx_client:   KRX 데이터 클라이언트 (소스 노드만 사용, 그 외 None 허용)
+    extras:       특수 노드를 위한 추가 자원 (LLM 클라이언트 등)
     """
     as_of_date: str
     run_id: str
@@ -51,6 +51,7 @@ class ExecutionContext:
     krx_client: Any = None
     is_single_analysis: bool = False  # 특정 종목 정밀 분석 모드 (필터링 방지)
     extras: dict[str, Any] = field(default_factory=dict)
+    progress_callback: Callable[[dict[str, Any]], None] | None = None
 
 
 class EmptyParams(BaseModel):

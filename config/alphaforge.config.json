@@ -1,0 +1,48 @@
+{
+  "version": "1.2",
+  "score": {
+    "max_score": 250,
+    "hard_gate_effective_score": null
+  },
+  "market_regime": {
+    "vix_risk_on": 18,
+    "vix_risk_off": 25,
+    "vix_crisis": 35,
+    "default_distribution": {
+      "RISK_ON": 20,
+      "NEUTRAL": 45,
+      "RISK_OFF": 25,
+      "CRISIS": 10
+    }
+  },
+  "risk_gate": {
+    "risk_off_hold_classes": ["TIER_2"],
+    "crisis_block_classes": ["TIER_1", "TIER_2"],
+    "hard_fail_liquidity_statuses": ["ILLIQUID"],
+    "hold_data_statuses": ["DATA_MISSING", "LIQUIDITY_UNKNOWN", "LIQUIDITY_UNCERTAIN"],
+    "data_unit_warning_flags": ["DATA_UNIT_WARNING", "MARKET_CAP_UNIT_WARNING", "VOLUME_SOURCE_UNCERTAIN"]
+  },
+  "watch_alert": {
+    "near_box_pct": 3.0,
+    "setup_box_pct": 7.0,
+    "rs_leadership": 80,
+    "rs_near_breakout": 70,
+    "flow_strong": 25
+  },
+  "vcp": {
+    "base_box_limit": 25,
+    "market_volatility_multiplier": {
+      "normal": 1.0,
+      "elevated": 1.15,
+      "crisis": 1.0
+    },
+    "stock_atr_multiplier_min": 0.85,
+    "stock_atr_multiplier_max": 1.25
+  },
+  "dca_policy": {
+    "RISK_ON": "regular_dca",
+    "NEUTRAL": "regular_dca_with_cash_buffer",
+    "RISK_OFF": "defensive_dca",
+    "CRISIS": "preserve_cash_and_reassess"
+  }
+}
