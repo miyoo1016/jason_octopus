@@ -44,6 +44,7 @@ class ScoreFilterNode(BaseNode):
             build_feature_based_promotion_reasons, normalize_display_reason_list,
             get_display_rejected_reasons, infer_display_watch_alert_type,
             rejected_vcp_diagnostic_label, build_tier2_display_reasons,
+            polish_display_reasons,
         )
         df = inputs[0].copy()
 
@@ -418,20 +419,20 @@ class ScoreFilterNode(BaseNode):
                 )
             if str(b).startswith("TIER"):
                 if str(b) == "TIER_2":
-                    display_reasons_list.append(build_tier2_display_reasons(row.to_dict()))
+                    display_reasons_list.append(polish_display_reasons(row.to_dict(), build_tier2_display_reasons(row.to_dict()), str(b)))
                 else:
-                    display_reasons_list.append(normalize_display_reason_list(
+                    display_reasons_list.append(polish_display_reasons(row.to_dict(), normalize_display_reason_list(
                         label_reasons
                         + promotion_reasons_list[i]
                         + watchlist_reasons_list[i]
                         + build_feature_based_promotion_reasons(row.to_dict()),
                         str(b),
-                    ))
+                    ), str(b)))
             elif str(b) == "WATCHLIST":
-                display_reasons_list.append(_fne(
+                display_reasons_list.append(polish_display_reasons(row.to_dict(), _fne(
                     normalize_display_reason_list(label_reasons + watchlist_reasons_list[i], str(b)),
                     normalize_display_reason_list(promotion_reasons_list[i], str(b)),
-                ))
+                ), str(b)))
             else:
                 display_reasons_list.append([])
         res_df["display_promotion_reasons"] = display_reasons_list

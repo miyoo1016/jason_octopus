@@ -183,6 +183,42 @@ def build_tier2_display_reasons(row: Dict[str, Any]) -> List[str]:
     return dedupe_keep_order(reasons)
 
 
+def polish_display_reasons(row: Dict[str, Any], reasons: Any, bucket: str = "") -> List[str]:
+    bucket = str(bucket or row.get("primary_bucket") or row.get("final_class") or "").upper()
+    rs = safe_float(row.get("rs_percentile", row.get("rs_rating")))
+    flow = safe_float(row.get("flow_total_score") or row.get("flow_score") or row.get("supply_score"))
+    polished: List[str] = []
+    for raw in _expand_reason_items(reasons):
+        text = normalize_display_reason_text(raw, bucket)
+        if text in {
+            "확인 대기",
+            "강한 주도주 후보",
+            "관찰 후보",
+            "주요 구조 안정적",
+        }:
+            continue
+        replacements = {
+            "VCP_WARNING 허용": "VCP 수축 진행 중",
+            "LIQUIDITY_UNCERTAIN 허용 단 Tier 제한": "유동성 제약 내 구조 유효",
+            "RALLY_EXHAUSTION 리스크 관찰": "추세 과열 진입 국면",
+            "REVERSE_EXPANSION 관찰": "VCP 역수축 확인 중",
+        }
+        text = replacements.get(text, text)
+        if text in {"강한 RS 리더십", "RS 리더십 후보", "RS 리더십", "고RS 후보"} and rs is not None:
+            if rs >= 95:
+                text = f"RS 최상위 리더십({rs:.1f})"
+            elif rs >= 85:
+                text = f"RS 강한 리더십({rs:.1f})"
+            elif rs >= 80:
+                text = f"RS 리더십({rs:.1f})"
+        if text.startswith("수급 강함") and flow is not None and flow >= 20:
+            text = f"수급 강함({flow:.0f})"
+        if any(bad in text for bad in ("_WARNING", "_UNCERTAIN", "_허용")):
+            continue
+        polished.append(text)
+    return clean_display_reasons(polished, bucket)
+
+
 def normalize_display_reason_text(reason: Any, primary_bucket: str = "") -> str:
     text = str(reason or "").strip()
     bucket = str(primary_bucket or "").upper()
@@ -479,6 +515,7 @@ def normalize_result_schema(row: Dict[str, Any], run_context: Optional[Dict[str,
             )
         if not display_promotion:
             display_promotion = build_feature_based_promotion_reasons(row)
+        display_promotion = polish_display_reasons(row, display_promotion, primary_bucket)
             
         row["promotion_reasons"] = display_promotion
         row["tier_promotion_reasons"] = display_promotion
@@ -497,6 +534,7 @@ def normalize_result_schema(row: Dict[str, Any], run_context: Optional[Dict[str,
         )
         if not display_promotion:
             display_promotion = build_feature_based_watchlist_reasons(row)
+        display_promotion = polish_display_reasons(row, display_promotion, primary_bucket)
             
         row["display_promotion_reasons"] = display_promotion
         # WATCHLIST는 내부 promotion_reasons가 []일 수 있으나, display는 반드시 채움
