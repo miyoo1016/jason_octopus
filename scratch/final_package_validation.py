@@ -84,6 +84,16 @@ async def validate_n(n: int):
     for item in payload['diagnostics'].get('top_risk_watch_reasons', []):
         print(f"  {item['reason']}: {item['count']}")
 
+    final_df = result.outputs.get("top", pd.DataFrame())
+    dual_cols = [
+        "name", "primary_bucket", "short_swing_score", "position_swing_score",
+        "horizon_label", "short_reasons", "position_reasons",
+    ]
+    dual_cols = [c for c in dual_cols if c in final_df.columns]
+    if dual_cols:
+        print("\n[Dual Horizon]")
+        print(final_df[dual_cols].head(10).to_string(index=False))
+
 async def main():
     for n in [30, 100]:
         await validate_n(n)

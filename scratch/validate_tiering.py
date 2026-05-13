@@ -78,7 +78,13 @@ async def validate_with_n(n: int):
         
     print("\n[Sample Results (Top 10)]")
     final_df = result.outputs["top"]
-    cols = ["name", "primary_bucket", "watchlist_flag", "watch_reason", "watch_exclusion_reason"]
+    cols = [
+        "name", "primary_bucket", "watchlist_flag",
+        "short_swing_score", "position_swing_score", "horizon_label",
+        "short_reasons", "position_reasons",
+        "watch_reason", "watch_exclusion_reason",
+    ]
+    cols = [c for c in cols if c in final_df.columns]
     print(final_df[cols].head(10).to_string(index=False))
 
 async def main():

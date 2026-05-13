@@ -14,6 +14,12 @@ from fastapi.responses import JSONResponse
 from backend.config import settings
 from backend.analysis_jobs import analysis_jobs
 from backend.analysis_summary import build_analysis_payload
+from backend.alphaforge_export import (
+    export_alphaforge_candidates,
+    export_alphaforge_daily_history,
+    export_alphaforge_dual_horizon,
+    format_dual_horizon_console,
+)
 from backend.alphaforge_policy import build_ai_system_prompt, policy_metadata, validate_ai_provider
 from data.naver_krx import NaverKRXClient
 from data.holidays import prev_trading_day, is_trading_day
@@ -250,6 +256,41 @@ def _execute_sync(
         "pipeline_diagnostics": pipeline_diagnostics,
     }
     payload.update(build_analysis_payload(result, node_results))
+
+    if result.success and not is_single:
+        try:
+            final_df = None
+            for log in result.node_logs:
+                if log.node_type == "score_filter" and log.node_id in result.outputs:
+                    final_df = result.outputs[log.node_id]
+                    break
+            if final_df is None and result.node_logs:
+                for log in reversed(result.node_logs):
+                    if log.node_id in result.outputs:
+                        final_df = result.outputs[log.node_id]
+                        break
+            final_export_df = final_df if final_df is not None else pd.DataFrame()
+            generated_at = datetime.now().isoformat(timespec="seconds")
+            export_count = export_alphaforge_candidates(final_export_df, generated_at=generated_at)
+            logger.info("AlphaForge 후보 export 완료: %s개", export_count)
+            dual_count = export_alphaforge_dual_horizon(final_export_df)
+            logger.info("AlphaForge dual horizon export 완료: %s개", dual_count)
+            print(format_dual_horizon_console(final_export_df))
+            market = "ALL"
+            for nd in raw_nodes:
+                if nd.get("type") == "universe":
+                    market = str((nd.get("params") or {}).get("market") or market)
+                    break
+            history_count = export_alphaforge_daily_history(
+                final_export_df,
+                run_date=as_of_date,
+                generated_at=generated_at,
+                market=market,
+                universe_count=payload.get("summary", {}).get("universe_count"),
+            )
+            logger.info("AlphaForge daily history 저장 완료: %s개", history_count)
+        except Exception as e:
+            logger.error("AlphaForge 후보 export 실패: %s", e)
 
     # [신규] 데일리 분석 결과 자동 기록 (data/results/ 폴더)
     if result.success and not is_single:

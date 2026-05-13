@@ -175,6 +175,7 @@ def test_box_breakout_keeps_all_rows_when_no_breakout():
     assert len(out) == 30
     assert "breakout_status" in out.columns
     assert "breakout_score" in out.columns
+    assert out["box_high"].notna().all()
     assert set(out["breakout_status"]) == {"NOT_READY"}
     assert out["breakout_score"].notna().all()
 

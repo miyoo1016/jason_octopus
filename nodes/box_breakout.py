@@ -16,7 +16,7 @@ class BoxBreakoutParams(BaseModel):
 
 class BoxBreakoutNode(BaseNode):
     NODE_TYPE      = "box_breakout"
-    CACHE_VERSION  = "score-status-v2"
+    CACHE_VERSION  = "score-status-v3-box-high"
     DISPLAY_NAME   = "박스권 돌파 찾기"
     DESCRIPTION    = "최근 N일 최고가 근접 또는 돌파 상태를 점수/등급으로 표시합니다."
     INPUT_ARITY    = 1
@@ -29,6 +29,8 @@ class BoxBreakoutNode(BaseNode):
         "breakout_reason",
         "breakout_distance_pct",
         "breakout_volume_ratio",
+        "box_high",
+        "recent_high",
         "box_breakout_flag",
         "box_breakout_warning",
     )
@@ -45,6 +47,8 @@ class BoxBreakoutNode(BaseNode):
         breakout_pct: float | None = None,
         distance_pct: float | None = None,
         volume_ratio: float | None = None,
+        box_high: float | None = None,
+        recent_high: float | None = None,
         grade: str = "DATA_MISSING",
         warning: str | None = None,
     ) -> dict:
@@ -57,6 +61,8 @@ class BoxBreakoutNode(BaseNode):
         row_dict["breakout_reason"] = reason
         row_dict["breakout_distance_pct"] = distance_pct
         row_dict["breakout_volume_ratio"] = volume_ratio
+        row_dict["box_high"] = box_high
+        row_dict["recent_high"] = recent_high
         row_dict["box_breakout_flag"] = flag
         row_dict["box_breakout_warning"] = warning
         return row_dict
@@ -77,6 +83,8 @@ class BoxBreakoutNode(BaseNode):
             out["breakout_reason"] = "KRX client unavailable"
             out["breakout_distance_pct"] = None
             out["breakout_volume_ratio"] = None
+            out["box_high"] = None
+            out["recent_high"] = None
             out["box_breakout_flag"] = "DATA_MISSING"
             out["box_breakout_warning"] = "박스권 가격 데이터 수집 불가"
             return out
@@ -208,6 +216,8 @@ class BoxBreakoutNode(BaseNode):
                     breakout_pct=breakout_pct,
                     distance_pct=distance_pct,
                     volume_ratio=vol_ratio,
+                    box_high=box_high,
+                    recent_high=box_high,
                     grade=f"{grade} ({vol_ratio:.1f}배)",
                     warning=warning,
                 ))

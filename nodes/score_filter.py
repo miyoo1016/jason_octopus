@@ -31,7 +31,9 @@ class ScoreFilterNode(BaseNode):
         "promotion_reasons", "downgrade_reasons", "t2_rejection_reasons",
         "primary_reason", "secondary_reasons", "hard_gate_reasons",
         "risk_gate_reason", "regime_conflict_flag", "risk_flags",
-        "stock_flow_score", "market_flow_context", "sector_flow_context", "final_flow_bias"
+        "stock_flow_score", "market_flow_context", "sector_flow_context", "final_flow_bias",
+        "short_swing_score", "position_swing_score", "horizon_label",
+        "short_reasons", "position_reasons"
     )
     ParamsModel    = ScoreFilterParams
 
@@ -471,4 +473,5 @@ class ScoreFilterNode(BaseNode):
             for _, row in res_df.iterrows()
         ]
 
-        return res_df
+        from backend.alphaforge_export import add_dual_horizon_fields
+        return add_dual_horizon_fields(res_df)
