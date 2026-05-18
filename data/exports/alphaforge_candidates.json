@@ -1,25 +1,25 @@
 [
   {
-    "symbol": "042700",
-    "name": "한미반도체",
-    "tier": "TIER_2",
+    "symbol": "402340",
+    "name": "SK스퀘어",
+    "tier": "TIER_3",
     "alert_type": "ACTION_ALERT",
-    "rs": 86.4,
+    "rs": 99.0,
     "vcp_status": "VCP_WARNING",
-    "box_upper_price": 426000,
-    "total_score": 140,
-    "generated_at": "2026-05-13T17:24:59"
+    "box_upper_price": 1231000,
+    "total_score": 155,
+    "generated_at": "2026-05-16T08:00:17"
   },
   {
-    "symbol": "032830",
-    "name": "삼성생명",
-    "tier": "TIER_3",
-    "alert_type": "NONE",
-    "rs": 51.6,
+    "symbol": "009150",
+    "name": "삼성전기",
+    "tier": "TIER_2",
+    "alert_type": "ACTION_ALERT",
+    "rs": 92.7,
     "vcp_status": "VCP_WARNING",
-    "box_upper_price": 316500,
-    "total_score": 120,
-    "generated_at": "2026-05-13T17:24:59"
+    "box_upper_price": 1060000,
+    "total_score": 145,
+    "generated_at": "2026-05-16T08:00:17"
   },
   {
     "symbol": "000660",
@@ -28,30 +28,30 @@
     "alert_type": "RISK_WATCH",
     "rs": 95.8,
     "vcp_status": "REVERSE_EXPANSION",
-    "box_upper_price": 1967000,
-    "total_score": 134,
-    "generated_at": "2026-05-13T17:24:59"
+    "box_upper_price": 1994000,
+    "total_score": 125,
+    "generated_at": "2026-05-16T08:00:17"
   },
   {
-    "symbol": "009150",
-    "name": "삼성전기",
+    "symbol": "032830",
+    "name": "삼성생명",
     "tier": "WATCHLIST",
-    "alert_type": "RISK_WATCH",
-    "rs": 92.7,
-    "vcp_status": "RALLY_EXHAUSTION",
-    "box_upper_price": 995000,
-    "total_score": 133,
-    "generated_at": "2026-05-13T17:24:59"
+    "alert_type": "SETUP_WATCH",
+    "rs": 54.7,
+    "vcp_status": "BASE_BUILDING",
+    "box_upper_price": 334500,
+    "total_score": 115,
+    "generated_at": "2026-05-16T08:00:17"
   },
   {
-    "symbol": "402340",
-    "name": "SK스퀘어",
+    "symbol": "042700",
+    "name": "한미반도체",
     "tier": "WATCHLIST",
-    "alert_type": "RISK_WATCH",
-    "rs": 99.0,
-    "vcp_status": "RALLY_EXHAUSTION",
-    "box_upper_price": 1231000,
-    "total_score": 130,
-    "generated_at": "2026-05-13T17:24:59"
+    "alert_type": "NONE",
+    "rs": 89.5,
+    "vcp_status": "VCP_WARNING",
+    "box_upper_price": 426000,
+    "total_score": 115,
+    "generated_at": "2026-05-16T08:00:17"
   }
 ]
