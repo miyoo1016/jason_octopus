@@ -1059,6 +1059,11 @@ function renderResultSummaryStrip(result) {
   </div>`;
 
   if (s.top_recommendations && s.top_recommendations.length > 0) {
+    const hasBuyNow = s.top_recommendations.some(r => r.action === 'BUY_NOW');
+    const warningHtml = !hasBuyNow
+      ? `<div style="padding:6px 10px;background:#f59e0b;color:black;border-radius:6px;margin-top:6px;font-size:12px;font-weight:bold;">⚠️ BUY_NOW 없음. 조건부/소액탐색 후보만 존재</div>`
+      : '';
+
     const recHtml = s.top_recommendations.map(r => {
       const bg = r.action === 'BUY_NOW' ? '#047857' : r.action === 'CONDITIONAL_BUY' ? '#2563eb' : r.action === 'STARTER_POSITION' ? '#7c3aed' : '#6b7280';
       return `<div style="padding:6px 10px;background:var(--bg-3, #2a2a35);border-radius:6px;margin-top:6px;font-size:12px;">
@@ -1070,6 +1075,7 @@ function renderResultSummaryStrip(result) {
 
     html += `<div class="market-regime-strip" style="margin-top:8px;">
       <div><b>💡 Top 추천 (Recommendation Layer)</b></div>
+      ${warningHtml}
       ${recHtml}
     </div>`;
   }

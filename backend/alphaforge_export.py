@@ -682,3 +682,75 @@ def export_alphaforge_daily_history(
                 f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
     return len(new_records)
+
+
+def format_recommendation_console(final_df: pd.DataFrame, limit: int | None = None) -> str:
+    """Format Recommendation Layer details for console output."""
+    from backend.alphaforge_policy import infer_recommendation
+
+    if final_df is None or final_df.empty:
+        return "[Recommendation Layer]\n  결과 없음"
+
+    df = final_df.copy()
+
+    # 1. Row-level infer_recommendation
+    recs = []
+    for _, row in df.iterrows():
+        row_dict = row.to_dict()
+        row_dict.update(infer_recommendation(row_dict))
+        recs.append(row_dict)
+
+    df_recs = pd.DataFrame(recs)
+
+    # 2. Ranking Calculation
+    action_priority = {"BUY_NOW": 5, "CONDITIONAL_BUY": 4, "STARTER_POSITION": 3, "WATCH_ONLY": 2, "AVOID": 1}
+    df_recs["_action_priority"] = df_recs["recommendation_action"].map(action_priority).fillna(0)
+    df_recs = df_recs.sort_values(by=["_action_priority", "recommendation_score"], ascending=[False, False])
+
+    df_recs["recommendation_rank"] = None
+    top_mask = df_recs["recommendation_action"].isin({"BUY_NOW", "CONDITIONAL_BUY", "STARTER_POSITION"})
+    top_indices = df_recs[top_mask].index[:3]
+    for idx, i in enumerate(top_indices):
+        df_recs.at[i, "recommendation_rank"] = idx + 1
+
+    df_recs = df_recs.drop(columns=["_action_priority"])
+
+    rows = df_recs.head(limit) if limit else df_recs
+
+    lines = ["[Recommendation Layer 상세 결과]"]
+    for _, row in rows.iterrows():
+        symbol = row.get("code") or row.get("symbol") or "-"
+        name = row.get("name") or "-"
+        action = row.get("recommendation_action") or "WATCH_ONLY"
+        rank_val = row.get("recommendation_rank")
+        rank_str = f"{rank_val}" if rank_val is not None else "N/A"
+        score = int(row.get("recommendation_score") or 0)
+        size = int(row.get("suggested_position_size") or 0)
+        reason = row.get("recommendation_reason") or ""
+        trigger = row.get("entry_trigger") or ""
+        invalidation = row.get("invalidation_condition") or ""
+
+        lines.append(f"종목: {name} ({symbol})")
+        lines.append(f"추천: {action} | 순위 {rank_str} | 점수 {score} | 권장비중 {size}%")
+        lines.append(f"추천 사유: {reason}")
+        lines.append(f"진입 트리거: {trigger}")
+        lines.append(f"무효화 조건: {invalidation}")
+        lines.append("")
+
+    top_rows = df_recs[df_recs["recommendation_rank"].notna()].sort_values("recommendation_rank")
+
+    lines.append("[오늘의 추천 TOP 3]")
+    if top_rows.empty:
+        lines.append("  추천 후보 없음. 조건부/소액탐색 후보만 존재")
+    else:
+        has_buy_now = any(top_rows["recommendation_action"] == "BUY_NOW")
+        for idx, (_, row) in enumerate(top_rows.iterrows(), 1):
+            name = row.get("name") or "-"
+            action = row.get("recommendation_action") or "WATCH_ONLY"
+            size = int(row.get("suggested_position_size") or 0)
+            score = int(row.get("recommendation_score") or 0)
+            lines.append(f"{idx}. {name} — {action} / {size}% / 점수 {score}")
+        if not has_buy_now:
+            lines.append("BUY_NOW 없음. 조건부/소액탐색 후보만 존재")
+
+    return "\n".join(lines)

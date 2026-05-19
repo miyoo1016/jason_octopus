@@ -221,9 +221,9 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
 
     def _first_value(col: str, default=None):
         if col not in final_df or final_df.empty:
-            return defaul
+            return default
         vals = final_df[col].dropna()
-        return vals.iloc[0] if not vals.empty else defaul
+        return vals.iloc[0] if not vals.empty else default
 
     def _plain(value):
         if isinstance(value, np.ndarray):
@@ -434,7 +434,19 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
     summary["performance_summary"] = perf_summary
 
     # ── Recommendation Layer Ranking ──
-    if "recommendation_action" in final_df.columns and not final_df.empty:
+    if not final_df.empty:
+        from backend.alphaforge_policy import infer_recommendation
+        if "recommendation_action" not in final_df.columns:
+            recs = []
+            for _, row in final_df.iterrows():
+                recs.append(infer_recommendation(row.to_dict()))
+            rec_df = pd.DataFrame(recs, index=final_df.index)
+            # Avoid duplicate columns if any other fields exist
+            for col in rec_df.columns:
+                if col in final_df.columns:
+                    final_df = final_df.drop(columns=[col])
+            final_df = pd.concat([final_df, rec_df], axis=1)
+
         action_priority = {"BUY_NOW": 5, "CONDITIONAL_BUY": 4, "STARTER_POSITION": 3, "WATCH_ONLY": 2, "AVOID": 1}
         final_df["_action_priority"] = final_df["recommendation_action"].map(action_priority).fillna(0)
 
@@ -464,6 +476,11 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
                 "size": int(row.get("suggested_position_size", 0))
             })
         summary["top_recommendations"] = top_recs
+        has_buy_now = any(r["action"] == "BUY_NOW" for r in top_recs)
+        if not has_buy_now:
+            summary["top_recommendations_message"] = "BUY_NOW 없음. 조건부/소액탐색 후보만 존재"
+        else:
+            summary["top_recommendations_message"] = ""
 
 
     summary["operation_report"] = build_operation_report(

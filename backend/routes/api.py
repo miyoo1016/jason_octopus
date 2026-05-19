@@ -19,6 +19,7 @@ from backend.alphaforge_export import (
     export_alphaforge_daily_history,
     export_alphaforge_dual_horizon,
     format_dual_horizon_console,
+    format_recommendation_console,
 )
 from backend.alphaforge_policy import build_ai_system_prompt, policy_metadata, validate_ai_provider
 from data.naver_krx import NaverKRXClient
@@ -280,6 +281,7 @@ def _execute_sync(
             dual_count = export_alphaforge_dual_horizon(final_export_df)
             logger.info("AlphaForge dual horizon export 완료: %s개", dual_count)
             print(format_dual_horizon_console(final_export_df))
+            print(format_recommendation_console(final_export_df))
             market = "ALL"
             for nd in raw_nodes:
                 if nd.get("type") == "universe":
