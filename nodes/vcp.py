@@ -15,6 +15,182 @@ from engine.leakage_guard import assert_no_future_data
 from engine.node_base import BaseNode, ExecutionContext
 
 
+VCP_COMPONENT_KEYS = (
+    "contraction_count_score",
+    "volatility_compression_score",
+    "volume_dry_up_score",
+    "higher_low_score",
+    "box_tightness_score",
+    "near_pivot_score",
+    "reverse_expansion_penalty",
+)
+
+
+def classify_vcp_component_status(score: float, is_reverse: bool = False) -> str:
+    if is_reverse:
+        return "REVERSE_EXPANSION"
+    if score >= 75:
+        return "VCP_CONFIRMED"
+    if score >= 60:
+        return "VCP_FORMING"
+    if score >= 45:
+        return "CONTRACTION_WARN"
+    return "NO_VCP"
+
+
+def _to_pct(value: float) -> float:
+    return value * 100.0 if abs(value) <= 1.0 else value
+
+
+def _empty_vcp_component_scores() -> dict[str, int | None]:
+    scores = {key: 0 for key in VCP_COMPONENT_KEYS}
+    scores["component_total"] = 0
+    scores["final_raw_score"] = None
+    return scores
+
+
+def build_vcp_component_scores(
+    *,
+    contraction_count: int,
+    max_contraction: float,
+    adjusted_box_limit: float,
+    recent_volatility: float,
+    dist_from_high: float,
+    volume_declining: bool,
+    volume_expanding: bool,
+    volume_dryup_ratio: float | None,
+    width_trend: str,
+    contraction_lows: list[float] | None = None,
+    is_reverse: bool = False,
+    is_overextended: bool = False,
+) -> tuple[int, dict[str, int], str]:
+    """Build a granular VCP score from already computed price/volume diagnostics."""
+    if contraction_count >= 4:
+        contraction_count_score = 18
+    elif contraction_count == 3:
+        contraction_count_score = 16
+    elif contraction_count == 2:
+        contraction_count_score = 11
+    elif contraction_count == 1:
+        contraction_count_score = 5
+    else:
+        contraction_count_score = 0
+
+    vol_pct = _to_pct(float(recent_volatility or 0.0))
+    if vol_pct <= 6:
+        volatility_compression_score = 18
+    elif vol_pct <= 10:
+        volatility_compression_score = 15
+    elif vol_pct <= 15:
+        volatility_compression_score = 11
+    elif vol_pct <= 22:
+        volatility_compression_score = 6
+    else:
+        volatility_compression_score = 2
+    if width_trend == "CONTRACTING":
+        volatility_compression_score = min(18, volatility_compression_score + 2)
+
+    if volume_expanding:
+        volume_dry_up_score = 0
+    elif volume_declining:
+        ratio = volume_dryup_ratio if volume_dryup_ratio is not None else 0.85
+        if ratio <= 0.60:
+            volume_dry_up_score = 16
+        elif ratio <= 0.75:
+            volume_dry_up_score = 13
+        elif ratio <= 0.85:
+            volume_dry_up_score = 10
+        else:
+            volume_dry_up_score = 7
+    elif volume_dryup_ratio is not None and volume_dryup_ratio <= 1.0:
+        volume_dry_up_score = 5
+    else:
+        volume_dry_up_score = 2
+
+    lows = contraction_lows or []
+    if len(lows) >= 3:
+        higher_pairs = sum(1 for i in range(1, len(lows)) if lows[i] >= lows[i - 1])
+        higher_low_score = int(round(12 * higher_pairs / max(len(lows) - 1, 1)))
+    elif len(lows) == 2:
+        higher_low_score = 8 if lows[-1] >= lows[-2] else 2
+    elif contraction_count >= 2 and width_trend == "CONTRACTING":
+        higher_low_score = 6
+    else:
+        higher_low_score = 0
+
+    if adjusted_box_limit > 0 and max_contraction > 0:
+        width_ratio = max_contraction / adjusted_box_limit
+        if width_ratio <= 0.50:
+            box_tightness_score = 16
+        elif width_ratio <= 0.75:
+            box_tightness_score = 14
+        elif width_ratio <= 1.00:
+            box_tightness_score = 12
+        elif width_ratio <= 1.15:
+            box_tightness_score = 8
+        elif width_ratio <= 1.50:
+            box_tightness_score = 4
+        else:
+            box_tightness_score = 0
+    else:
+        width_ratio = 0.0
+        box_tightness_score = 0
+
+    pivot_dist_pct = _to_pct(float(dist_from_high or 0.0))
+    if pivot_dist_pct <= 3:
+        near_pivot_score = 12
+    elif pivot_dist_pct <= 7:
+        near_pivot_score = 9
+    elif pivot_dist_pct <= 12:
+        near_pivot_score = 6
+    elif pivot_dist_pct <= 18:
+        near_pivot_score = 3
+    else:
+        near_pivot_score = 0
+
+    reverse_expansion_penalty = 0
+    if is_reverse:
+        reverse_expansion_penalty += 30
+    if width_trend == "EXPANDING":
+        reverse_expansion_penalty += 8
+    if volume_expanding:
+        reverse_expansion_penalty += 10
+    if adjusted_box_limit > 0 and max_contraction > adjusted_box_limit:
+        reverse_expansion_penalty += min(15, int(round((width_ratio - 1.0) * 12)))
+    if is_overextended:
+        reverse_expansion_penalty += 12
+
+    component_total = (
+        contraction_count_score
+        + volatility_compression_score
+        + volume_dry_up_score
+        + higher_low_score
+        + box_tightness_score
+        + near_pivot_score
+    )
+    raw_score = max(30, min(100, int(round(component_total - reverse_expansion_penalty))))
+    if is_reverse:
+        raw_score = min(raw_score, 44)
+
+    component_scores = {
+        "contraction_count_score": contraction_count_score,
+        "volatility_compression_score": volatility_compression_score,
+        "volume_dry_up_score": volume_dry_up_score,
+        "higher_low_score": higher_low_score,
+        "box_tightness_score": box_tightness_score,
+        "near_pivot_score": near_pivot_score,
+        "reverse_expansion_penalty": reverse_expansion_penalty,
+        "component_total": component_total,
+        "final_raw_score": raw_score,
+    }
+    quality_reason = (
+        f"수축 {contraction_count_score}, 변동성 {volatility_compression_score}, "
+        f"거래량 {volume_dry_up_score}, 저점 {higher_low_score}, 박스 {box_tightness_score}, "
+        f"피벗 {near_pivot_score}, 패널티 -{reverse_expansion_penalty}"
+    )
+    return raw_score, component_scores, quality_reason
+
+
 class VcpParams(BaseModel):
     lookback_days: int = 120
     min_score: int = 70
@@ -22,7 +198,7 @@ class VcpParams(BaseModel):
 
 class VcpNode(BaseNode):
     NODE_TYPE = "vcp"
-    CACHE_VERSION = "strict-quality-v2"
+    CACHE_VERSION = "component-quality-v3"
     DISPLAY_NAME = "VCP 패턴 찾기"
     DESCRIPTION = "변동성 수축 상태를 점수와 상태 플래그로 분류합니다."
     INPUT_ARITY = 1
@@ -33,7 +209,8 @@ class VcpNode(BaseNode):
         "vcp_prev_base_width_pct", "vcp_atr_trend", "vcp_volume_dryup_score", "vcp_volume_trend",
         "vcp_price_tightness_score", "vcp_reverse_expansion_flag", "vcp_rally_exhaustion_flag",
         "vcp_reason_codes", "vcp_confidence", "vcp_cross_warning",
-        "vcp_width_score", "vcp_atr_score", "vcp_penalty_reasons", "vcp_bonus_reasons"
+        "vcp_width_score", "vcp_atr_score", "vcp_penalty_reasons", "vcp_bonus_reasons",
+        "vcp_component_scores", "vcpComponentScores", "vcp_quality_reason", "vcpQualityReason"
     )
     ParamsModel = VcpParams
 
@@ -81,7 +258,11 @@ class VcpNode(BaseNode):
                     "vcp_width_score": 0,
                     "vcp_atr_score": 0,
                     "vcp_penalty_reasons": ["DATA_MISSING"],
-                    "vcp_bonus_reasons": []
+                    "vcp_bonus_reasons": [],
+                    "vcp_component_scores": _empty_vcp_component_scores(),
+                    "vcpComponentScores": _empty_vcp_component_scores(),
+                    "vcp_quality_reason": "VCP 가격 데이터 부족",
+                    "vcpQualityReason": "VCP 가격 데이터 부족",
                 })
                 results.append(row_dict)
                 continue
@@ -139,17 +320,21 @@ class VcpNode(BaseNode):
                     if highs[i] == max(window_highs) and all(highs[j] != highs[i] for j in range(i - pivot_w, i)):
                         pivot_indices.append(i)
 
-                contractions: list[float] = []
+                contraction_pairs: list[tuple[float, float]] = []
                 if len(pivot_indices) >= 2:
                     for k in range(len(pivot_indices) - 1):
                         prev_high = highs[pivot_indices[k]]
                         period_low = min(lows[pivot_indices[k]:pivot_indices[k + 1] + 1])
-                        contractions.append((prev_high - period_low) / prev_high * 100 if prev_high > 0 else 0.0)
+                        depth = (prev_high - period_low) / prev_high * 100 if prev_high > 0 else 0.0
+                        contraction_pairs.append((depth, float(period_low)))
                     last_high = highs[pivot_indices[-1]]
                     final_low = min(lows[pivot_indices[-1]:])
-                    contractions.append((last_high - final_low) / last_high * 100 if last_high > 0 else 0.0)
+                    depth = (last_high - final_low) / last_high * 100 if last_high > 0 else 0.0
+                    contraction_pairs.append((depth, float(final_low)))
 
+                contractions = [depth for depth, _ in contraction_pairs]
                 valid_contractions = [d for d in contractions if d < 25.0]
+                valid_contraction_lows = [low for depth, low in contraction_pairs if depth < 25.0]
                 max_contraction = max(contractions) if contractions else 0.0
                 
                 if max_contraction > 0:
@@ -165,6 +350,7 @@ class VcpNode(BaseNode):
             else:
                 pivot_indices = []
                 valid_contractions = []
+                valid_contraction_lows = []
                 max_contraction = 0.0
                 vcp_width_score = 0
                 vcp_penalty_reasons.append("DATA_TOO_SHORT")
@@ -200,6 +386,7 @@ class VcpNode(BaseNode):
             volume_declining = False
             volume_expanding = False
             dryup_score = 0
+            volume_dryup_ratio = None
             
             if is_reverse:
                 warnings.append("역수축 경고")
@@ -216,6 +403,7 @@ class VcpNode(BaseNode):
                 
                 volume_declining = prior_volume > 0 and avg_volume <= prior_volume * 0.85
                 volume_expanding = prior_volume > 0 and avg_volume > prior_volume * 1.25
+                volume_dryup_ratio = avg_volume / prior_volume if prior_volume > 0 else None
                 
                 if volume_declining:
                     dryup_score = 70 if avg_volume <= prior_volume * 0.6 else 40
@@ -253,42 +441,34 @@ class VcpNode(BaseNode):
             recent_5d_gain = (today_close / vcp_hist["close"].iloc[-6] - 1.0) if len(vcp_hist) >= 6 else 0.0
             is_overextended = disparity_20 > 1.25 or recent_5d_gain > 0.40
 
-            if is_reverse:
-                status = "REVERSE_EXPANSION"
-                score = 35
-            elif is_overextended:
-                status = "RALLY_EXHAUSTION"
-                score = 40
+            score, component_scores, quality_reason = build_vcp_component_scores(
+                contraction_count=len(valid_contractions),
+                max_contraction=max_contraction,
+                adjusted_box_limit=adjusted_box_limit,
+                recent_volatility=recent_volatility,
+                dist_from_high=dist_from_high,
+                volume_declining=volume_declining,
+                volume_expanding=volume_expanding,
+                volume_dryup_ratio=volume_dryup_ratio,
+                width_trend=width_trend,
+                contraction_lows=valid_contraction_lows,
+                is_reverse=is_reverse,
+                is_overextended=is_overextended,
+            )
+            status = classify_vcp_component_status(score, is_reverse=is_reverse)
+
+            if is_overextended:
                 warnings.append(f"랠리 피로도 (20일 이격 {disparity_20:.2f})")
                 vcp_reason_codes.append("RALLY_EXHAUSTION")
                 vcp_penalty_reasons.append("RALLY_EXHAUSTION")
-            elif strict_ready and warning_count == 0:
-                status = "VCP_STRICT"
-                score = 92 if len(valid_contractions) == 3 else 98
-                vcp_bonus_reasons.append("STRICT_SETUP_BONUS")
-            elif valid_ready and warning_count <= 1:
-                status = "VCP_VALID"
-                score = 78
-                vcp_bonus_reasons.append("VALID_SETUP_BONUS")
-            elif severe_warning or warning_count >= 2:
-                status = "VCP_WARNING"
-                score = 45
-            elif is_high_consolidation:
-                status = "HIGH_CONSOLIDATION"
-                score = 75
-                vcp_bonus_reasons.append("HIGH_CONSOLIDATION_BONUS")
-            elif is_strong_leader:
-                status = "STRONG_LEADER_NO_PIVOT"
-                score = 65
-            elif is_near_setup:
-                status = "NEAR_SETUP"
-                score = 60
-            elif len(valid_contractions) >= 1:
-                status = "BASE_BUILDING"
-                score = 50
-            else:
-                status = "NOT_READY"
-                score = 35
+            if status == "VCP_CONFIRMED":
+                vcp_bonus_reasons.append("COMPONENT_CONFIRMED_SETUP")
+            elif status == "VCP_FORMING":
+                vcp_bonus_reasons.append("COMPONENT_FORMING_SETUP")
+            elif status == "CONTRACTION_WARN":
+                vcp_penalty_reasons.append("COMPONENT_CONTRACTION_WARN")
+            elif status == "NO_VCP":
+                vcp_penalty_reasons.append("COMPONENT_NO_VCP")
 
             raw, eff, disp, conf, cross = normalize_vcp_score({
                 "vcp_score": score,
@@ -323,6 +503,10 @@ class VcpNode(BaseNode):
                 "vcp_atr_score": vcp_atr_score,
                 "vcp_penalty_reasons": vcp_penalty_reasons,
                 "vcp_bonus_reasons": vcp_bonus_reasons,
+                "vcp_component_scores": component_scores,
+                "vcpComponentScores": component_scores,
+                "vcp_quality_reason": quality_reason,
+                "vcpQualityReason": quality_reason,
                 "adjusted_box_limit": round(adjusted_box_limit, 2),
                 "stock_atr_multiplier": round(stock_atr_multiplier, 3),
                 "vcp_warning": " | ".join(warnings) if warnings else status,

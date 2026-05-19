@@ -3,7 +3,9 @@ import pandas as pd
 from backend.alphaforge_policy import (
     clean_display_reasons,
     get_display_rejected_reasons,
+    get_buy_candidate_gate_result,
     infer_display_watch_alert_type,
+    infer_final_label,
     normalize_reason_label,
     normalize_result_schema,
 )
@@ -43,6 +45,82 @@ def test_watch_alert_type_display_and_fallback():
         "watch_alert_flag": True,
         "vcp_status": "REVERSE_EXPANSION",
     }) == "RISK_WATCH"
+    assert infer_display_watch_alert_type({
+        "primary_bucket": "TIER_3",
+        "watch_alert_flag": True,
+        "watch_alert_type": "ACTION_ALERT",
+    }) == "PRIORITY_WATCH"
+    assert infer_display_watch_alert_type({
+        "primary_bucket": "TIER_2",
+        "watch_alert_flag": True,
+        "watch_alert_type": "ACTION_ALERT",
+    }) == "NEAR_BUY"
+
+
+def _buy_gate_candidate(**overrides):
+    row = {
+        "primary_bucket": "TIER_2",
+        "watch_alert_flag": True,
+        "watch_alert_type": "ACTION_ALERT",
+        "rs_percentile": 86,
+        "vcp_effective_score": 68,
+        "vcp_status": "VCP_VALID",
+        "ma_alignment_flag": "ALIGNED",
+        "box_depth": 12,
+        "breakout_status": "BREAKOUT_CONFIRMED",
+        "breakout_volume_ratio": 1.6,
+        "liquidity_trading_value": 3_000_000_000,
+        "dominant_regime": "NEUTRAL",
+        "data_unit_check": "OK",
+        "liquidity_status": "LIQUID",
+    }
+    row.update(overrides)
+    return row
+
+
+def _buy_gate_context(mode="STRICT_MODE"):
+    return {
+        "screening_mode": mode,
+        "min_trading_value_krw": 2_000_000_000,
+        "market_regime": {"dominant_regime": "NEUTRAL"},
+    }
+
+
+def test_explore_mode_never_creates_buy_candidate():
+    row = _buy_gate_candidate()
+    row.update(get_buy_candidate_gate_result(row, _buy_gate_context("EXPLORE_MODE")))
+
+    assert row["buy_gate_passed"] is False
+    assert "SCREENING_MODE_NOT_STRICT" in row["failed_buy_gates"]
+    assert infer_final_label(row) == "NEAR_BUY"
+
+
+def test_strict_mode_all_gates_pass_creates_buy_candidate():
+    row = _buy_gate_candidate()
+    row.update(get_buy_candidate_gate_result(row, _buy_gate_context("STRICT_MODE")))
+
+    assert row["buy_gate_passed"] is True
+    assert row["failed_buy_gates"] == []
+    assert infer_final_label(row) == "BUY_CANDIDATE"
+
+
+def test_reverse_expansion_blocks_buy_candidate():
+    row = _buy_gate_candidate(vcp_status="REVERSE_EXPANSION")
+    row.update(get_buy_candidate_gate_result(row, _buy_gate_context("STRICT_MODE")))
+
+    assert row["buy_gate_passed"] is False
+    assert "VCP_REVERSE_EXPANSION" in row["failed_buy_gates"]
+    assert infer_final_label(row) != "BUY_CANDIDATE"
+
+
+def test_low_vcp_blocks_buy_and_records_failed_gate():
+    row = _buy_gate_candidate(vcp_effective_score=55)
+    row.update(get_buy_candidate_gate_result(row, _buy_gate_context("STRICT_MODE")))
+
+    assert row["buy_gate_passed"] is False
+    assert row["failed_buy_gates"] == ["VCP_SCORE_BELOW_60"]
+    assert row["buy_gate_reason"] == "VCP_SCORE_BELOW_60"
+    assert infer_final_label(row) == "NEAR_BUY"
 
 
 def test_reason_code_korean_labels():

@@ -98,7 +98,7 @@ def _data_missing_ratio(df: pd.DataFrame) -> float:
     return round(float(val), 4) if pd.notna(val) else 0.0
 
 
-def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]], as_of_date: str = "") -> dict[str, Any]:
     outputs: dict[str, pd.DataFrame] = result.outputs
     logs = result.node_logs
     final_df = _final_dataframe(outputs, logs)
@@ -135,6 +135,24 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]])
     w_flag_col = "watchlist_flag" if "watchlist_flag" in final_df else None
     watchlist_flag_true = int(final_df[w_flag_col].fillna(False).astype(bool).sum()) if w_flag_col else 0
     watchlist_flag_false = len(final_df) - watchlist_flag_true
+    if final_df.empty:
+        label_series = pd.Series(dtype=str)
+    elif "final_label" in final_df:
+        label_series = final_df["final_label"].fillna("").astype(str)
+    elif "display_label" in final_df:
+        label_series = final_df["display_label"].fillna("").astype(str)
+    else:
+        try:
+            from backend.alphaforge_policy import infer_final_label
+            label_series = final_df.apply(lambda row: infer_final_label(row.to_dict()), axis=1).astype(str)
+        except Exception:
+            label_series = pd.Series([""] * len(final_df), index=final_df.index)
+
+    priority_watch_count = int(label_series.eq("PRIORITY_WATCH").sum()) if len(label_series) else 0
+    risk_watch_count = int(label_series.eq("RISK_WATCH").sum()) if len(label_series) else 0
+    setup_watch_count = int(label_series.eq("SETUP_WATCH").sum()) if len(label_series) else 0
+    near_buy_count = int(label_series.eq("NEAR_BUY").sum()) if len(label_series) else 0
+    buy_candidate_count = int(label_series.eq("BUY_CANDIDATE").sum()) if len(label_series) else 0
 
     node_counts = []
     most_aggressive = None
@@ -260,6 +278,7 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]])
         "rs_status_distribution": _get_dist("rs_status"),
         "primary_bucket_distribution": _get_dist(bucket_col),
         "watch_alert_type_distribution": _get_dist("watch_alert_type"),
+        "display_label_distribution": _get_dist("final_label") or _get_dist("display_label") or _get_dist("display_watch_alert_type"),
         "candidate_confidence_distribution": _get_dist("candidate_confidence"),
         "policy_violation_count": int(final_df["policy_violation_count"].sum()) if "policy_violation_count" in final_df else 0,
         "policy_violation_records": _records(final_df[final_df["policy_violation_count"] > 0][["code", "name", "policy_violation_records"]], 10) if "policy_violation_count" in final_df else [],
@@ -282,6 +301,7 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]])
         "display_rejected_reasons": _agg_reasons("display_rejected_reasons"),
         "display_watch_alert_reasons": _agg_reasons("display_watch_alert_reasons"),
         "display_restriction_reasons": _agg_reasons("display_restriction_reasons"),
+        "failed_buy_gates": _agg_reasons("failed_buy_gates"),
         "watchlist_reasons": _agg_reasons("watchlist_reasons"),
         "tier_downgrade_reasons": _agg_reasons("tier_downgrade_reasons"),
         "rejected_reasons": _agg_reasons("rejected_reasons"),
@@ -361,7 +381,7 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]])
     if diagnostics.get("missing_display_rejected_reason_count", 0) > 0:
         diagnostics["data_quality_warnings"].append("REJECTED 종목 중 제외 사유 표시가 비어 있습니다.")
     if diagnostics.get("watch_alert_type_missing_count", 0) > 0:
-        diagnostics["data_quality_warnings"].append("Watch Alert가 켜졌지만 alert type이 비어 있는 종목이 있습니다.")
+        diagnostics["data_quality_warnings"].append("관찰 라벨이 켜졌지만 legacy alert type이 비어 있는 종목이 있습니다.")
     if diagnostics.get("reason_code_untranslated_count", 0) > 0:
         diagnostics["data_quality_warnings"].append("사용자 화면에 코드형 reason이 남아 있을 수 있습니다.")
     if diagnostics.get("vcp_raw_missing_count", 0) > 0:
@@ -396,9 +416,30 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]])
         "watchlist_flag_count": watchlist_flag_true, # Compatibility
         "watch_alert_count": watchlist_flag_true,
         "action_alert_count": int(final_df["watch_alert_type"].eq("ACTION_ALERT").sum()) if "watch_alert_type" in final_df else 0,
-        "risk_watch_count": int(final_df["watch_alert_type"].eq("RISK_WATCH").sum()) if "watch_alert_type" in final_df else 0,
+        "buy_candidate_count": buy_candidate_count,
+        "hard_gate_buy_candidate_count": buy_candidate_count,
+        "priority_watch_count": priority_watch_count,
+        "risk_watch_count": risk_watch_count,
+        "setup_watch_count": setup_watch_count,
+        "near_buy_count": near_buy_count,
+        "buy_candidate_message": "하드 게이트 통과 매수 후보" if buy_candidate_count > 0 else "",
+        "no_buy_candidate_message": "오늘 실전 매수 후보 없음" if buy_candidate_count == 0 else "",
+        "watch_only_message": "현재 결과는 관찰 후보이며 자동 매수 신호가 아닙니다." if buy_candidate_count == 0 else "",
         "market_regime": market_regime,
     }
+
+    from backend.performance_tracker import get_performance_summary
+    perf_date = as_of_date if as_of_date else (getattr(result, "as_of_date", None) or "")
+    perf_summary = get_performance_summary(final_df, perf_date)
+    summary["performance_summary"] = perf_summary
+
+    summary["operation_report"] = build_operation_report(
+        final_df=final_df,
+        summary=summary,
+        diagnostics=diagnostics,
+        perf_summary=perf_summary,
+        market_regime=market_regime,
+    )
 
     structured_results = {
         "tier1": _records(final_df[final_df[bucket_col] == "TIER_1"], 100) if bucket_col else [],
@@ -417,4 +458,113 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]])
         "diagnostics": diagnostics,
         "results": structured_results,
         "node_results": node_results,
+    }
+
+
+def build_operation_report(
+    final_df: pd.DataFrame,
+    summary: dict[str, Any],
+    diagnostics: dict[str, Any],
+    perf_summary: dict[str, Any],
+    market_regime: dict[str, Any],
+) -> dict[str, Any]:
+    """시스템 출력 품질 기반 운영 리포트 생성. 투자 점수가 아닌 파이프라인 품질 지표."""
+
+    buy_candidate_count = summary.get("buy_candidate_count", 0)
+    near_buy_count = summary.get("near_buy_count", 0)
+    priority_watch_count = summary.get("priority_watch_count", 0)
+    risk_watch_count = summary.get("risk_watch_count", 0)
+    rejected_count = summary.get("rejected_count", 0)
+    market_mode = str(market_regime.get("dominant_regime", "NEUTRAL"))
+    perf_status = perf_summary.get("status", "DATA_INSUFFICIENT")
+
+    # ── Top blocking reasons from failed_buy_gates ──────────────────────────
+    top_blocking_reasons: list[dict[str, Any]] = []
+    if not final_df.empty and "failed_buy_gates" in final_df.columns:
+        gate_counter: Counter[str] = Counter()
+        for raw in final_df["failed_buy_gates"].dropna():
+            if isinstance(raw, (list, tuple, np.ndarray)):
+                items = [str(r).strip() for r in raw if str(r).strip()]
+            else:
+                items = [x.strip() for x in str(raw).replace(", ", ",").split(",") if x.strip()]
+            for item in items:
+                gate_counter[item] += 1
+        top_blocking_reasons = [
+            {"reason": r, "count": int(c)} for r, c in gate_counter.most_common(5)
+        ]
+
+    # ── Quality Score (0~100, system output quality) ────────────────────────
+    score = 50  # neutral base
+
+    # Positive signals
+    if buy_candidate_count > 0 or near_buy_count > 0:
+        score += 10  # clear buy-tier labels exist
+    if not final_df.empty and "failed_buy_gates" in final_df.columns:
+        gates_recorded = final_df["failed_buy_gates"].apply(
+            lambda x: isinstance(x, list) and len(x) > 0
+        ).sum()
+        if gates_recorded > 0:
+            score += 10  # gate audit trail present
+    if perf_status == "READY":
+        score += 10  # performance data available
+    if not final_df.empty and "vcp_component_scores" in final_df.columns:
+        has_component = final_df["vcp_component_scores"].apply(
+            lambda x: isinstance(x, dict) and len(x) > 0
+        ).any()
+        if has_component:
+            score += 5  # VCP breakdown present
+    if not final_df.empty and "final_label" in final_df.columns:
+        score += 5  # labels assigned
+
+    # Negative signals (deductions)
+    if final_df.empty:
+        score -= 30  # no output at all
+    else:
+        missing_label_ratio = final_df["final_label"].isna().mean() if "final_label" in final_df.columns else 1.0
+        if missing_label_ratio > 0.5:
+            score -= 15  # >50% rows have no label
+        missing_close_ratio = final_df["close"].isna().mean() if "close" in final_df.columns else 0.0
+        if missing_close_ratio > 0.3:
+            score -= 10  # >30% rows missing close price
+    if not final_df.empty and "vcp_component_scores" not in final_df.columns:
+        score -= 5  # no VCP component breakdown
+    if perf_status == "DATA_INSUFFICIENT":
+        score -= 5  # no performance history yet
+
+    quality_score = max(0, min(100, score))
+
+    # ── Operator message ────────────────────────────────────────────────────
+    if final_df.empty:
+        operator_message = "분석 결과가 없습니다. 파이프라인 설정 및 데이터 상태를 확인하세요."
+        status = "DATA_INSUFFICIENT"
+    elif perf_status == "DATA_INSUFFICIENT" and buy_candidate_count == 0 and near_buy_count == 0:
+        operator_message = "성과 추적 데이터가 아직 부족합니다. 통계 판단은 보류하고 관찰 후보 중심으로 감시하세요."
+        status = "DATA_INSUFFICIENT"
+    elif buy_candidate_count > 0:
+        operator_message = (
+            f"하드 게이트를 통과한 매수 후보 {buy_candidate_count}개가 있습니다. "
+            "실패 게이트와 시장 국면을 함께 확인하세요."
+        )
+        status = "READY"
+    elif near_buy_count > 0:
+        operator_message = (
+            f"실전 매수 후보는 없으나 NEAR_BUY {near_buy_count}개가 있습니다. "
+            "하드 게이트 탈락 사유를 점검하세요."
+        )
+        status = "READY"
+    else:
+        operator_message = "오늘 실전 매수 후보 없음. 관찰 후보 중심으로 감시하세요."
+        status = "READY"
+
+    return {
+        "status": status,
+        "market_mode": market_mode,
+        "buy_candidate_count": buy_candidate_count,
+        "near_buy_count": near_buy_count,
+        "priority_watch_count": priority_watch_count,
+        "risk_watch_count": risk_watch_count,
+        "rejected_count": rejected_count,
+        "top_blocking_reasons": top_blocking_reasons,
+        "quality_score": quality_score,
+        "operator_message": operator_message,
     }

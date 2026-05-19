@@ -16,6 +16,30 @@ from typing import Any, Dict, List, Tuple, Optional, Union
 # 0~210 사이로 설계되었으며, 동일 screening run 안에서는 210으로 고정한다.
 DEFAULT_SCORE_MAX = 210.0
 
+DISPLAY_LABELS = {
+    "BUY_CANDIDATE",
+    "NEAR_BUY",
+    "PRIORITY_WATCH",
+    "RISK_WATCH",
+    "SETUP_WATCH",
+    "REJECTED",
+}
+
+DISPLAY_LABEL_TEXT = {
+    "BUY_CANDIDATE": "실전 매수 후보",
+    "NEAR_BUY": "확인 필요 후보",
+    "PRIORITY_WATCH": "최우선 관찰 후보",
+    "RISK_WATCH": "리스크 관찰 후보",
+    "SETUP_WATCH": "셋업 관찰 후보",
+    "REJECTED": "제외",
+}
+
+BUY_ELIGIBLE_MODES = {"STRICT_MODE", "BUY_MODE"}
+VCP_CONFIRMED_STATUSES = {"VCP_STRICT", "VCP_VALID", "VCP_CONFIRMED"}
+VCP_FORMING_STATUSES = {"VCP_WARNING", "BASE_BUILDING", "HIGH_CONSOLIDATION", "NEAR_SETUP", "VCP_FORMING", "CONTRACTION_WARN"}
+VCP_NO_VCP_STATUSES = {"NOT_READY", "NO_VCP"}
+VCP_RISK_STATUSES = {"REVERSE_EXPANSION", "RALLY_EXHAUSTION"}
+
 REASON_LABEL_MAP = {
     "HIGH_RS_CANDIDATE": "고RS 후보",
     "DATA_REVIEW_REQUIRED": "데이터 확인 필요",
@@ -28,6 +52,10 @@ REASON_LABEL_MAP = {
     "REVERSE_EXPANSION": "VCP 역수축",
     "RALLY_EXHAUSTION": "랠리 과열/소진 관찰",
     "FAILED_BREAKOUT": "돌파 실패",
+    "VCP_CONFIRMED": "VCP 확정",
+    "VCP_FORMING": "VCP 형성 중",
+    "CONTRACTION_WARN": "수축 품질 주의",
+    "NO_VCP": "VCP 미형성",
     "BASE_BUILDING": "베이스 형성 관찰",
     "VCP_WARNING": "VCP 주의",
     "NOT_READY": "아직 준비 부족",
@@ -142,9 +170,9 @@ def clean_display_reasons(reasons: Any, bucket: str = "") -> List[str]:
 
 def vcp_diagnostic_label(vcp_status: Any) -> str:
     status = str(vcp_status or "")
-    if status in {"REVERSE_EXPANSION", "RALLY_EXHAUSTION", "BASE_BUILDING"}:
+    if status in VCP_RISK_STATUSES or status in {"BASE_BUILDING", "NO_VCP", "VCP_CONFIRMED", "VCP_FORMING"}:
         return status
-    if status == "VCP_WARNING":
+    if status in {"VCP_WARNING", "CONTRACTION_WARN"}:
         return "CONTRACTION_WARN"
     return "MEDIUM"
 
@@ -176,7 +204,7 @@ def build_tier2_display_reasons(row: Dict[str, Any]) -> List[str]:
         reasons.append(f"RS 리더십({rs:.1f})")
     if ma in {"ALIGNED", "정배열"}:
         reasons.append("정배열")
-    if vcp_status == "VCP_WARNING":
+    if vcp_status in VCP_FORMING_STATUSES:
         reasons.append("VCP 수축 진행 중")
     if flow is not None and flow >= 20:
         reasons.append(f"수급 강함({flow:.0f})")
@@ -230,7 +258,7 @@ def normalize_display_reason_text(reason: Any, primary_bucket: str = "") -> str:
             return "돌파 거래량 확인 대기"
         if text.startswith("VCP 상태 부적합(") and text.endswith(")"):
             status = text.removeprefix("VCP 상태 부적합(").removesuffix(")")
-            if status in {"VCP_WARNING", "BASE_BUILDING", "DATA_MISSING"}:
+            if status in VCP_FORMING_STATUSES | {"DATA_MISSING"}:
                 return f"{status} 허용"
         if text.startswith("유동성 부적합(") and text.endswith(")"):
             status = text.removeprefix("유동성 부적합(").removesuffix(")")
@@ -278,6 +306,8 @@ def build_feature_based_rejected_reasons(row: Dict[str, Any]) -> List[str]:
         reasons.append("수급 극히 약함")
     if vcp_status == "REVERSE_EXPANSION":
         reasons.append("VCP 역수축")
+    if vcp_status in VCP_NO_VCP_STATUSES:
+        reasons.append("VCP 미형성")
     if breakout_status == "NOT_READY" and box_depth is not None and box_depth >= 20:
         reasons.append("박스권 매우 깊음")
     if (box_depth is not None and box_depth >= 20) or (box_distance is not None and abs(box_distance) >= 20):
@@ -312,23 +342,274 @@ def get_display_rejected_reasons(row: Dict[str, Any]) -> List[str]:
     return clean_display_reasons(reasons, "REJECTED")
 
 
-def infer_display_watch_alert_type(row: Dict[str, Any]) -> str:
+def _first_present_value(source: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = source.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        try:
+            missing = pd.isna(value)
+            if isinstance(missing, (bool, np.bool_)) and missing:
+                continue
+        except Exception:
+            pass
+        return value
+    return None
+
+
+def _normalize_screening_mode(value: Any) -> str:
+    mode = str(value or "").strip().upper()
+    if mode in {"AND", "STRICT"}:
+        return "STRICT_MODE"
+    if mode in {"OR", "EXPLORE"}:
+        return "EXPLORE_MODE"
+    if mode == "BUY":
+        return "BUY_MODE"
+    return mode
+
+
+def _is_ma_aligned(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().upper()
+    if not text:
+        return None
+    if text in {"ALIGNED", "TRUE", "YES", "Y", "1", "정배열"}:
+        return True
+    if text in {"NOT_ALIGNED", "FALSE", "NO", "N", "0", "역배열"}:
+        return False
+    return None
+
+
+def get_buy_candidate_gate_result(
+    candidate: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Evaluate hard gates for the reserved BUY_CANDIDATE display label."""
+    context = context or {}
+    failed: List[str] = []
+
+    mode = _normalize_screening_mode(
+        _first_present_value(candidate, "screening_mode", "screeningMode", "strategy_mode", "mode")
+        or _first_present_value(context, "screening_mode", "screeningMode", "strategy_mode", "mode")
+    )
+    if not mode:
+        failed.append("SCREENING_MODE_MISSING")
+    elif mode not in BUY_ELIGIBLE_MODES:
+        failed.append("SCREENING_MODE_NOT_STRICT")
+
+    rs = safe_float(_first_present_value(candidate, "rs_percentile", "rs_rating", "rs_score", "rs", "rsRating", "rsScore"))
+    if rs is None:
+        failed.append("RS_MISSING")
+    elif rs < 80:
+        failed.append("RS_BELOW_80")
+
+    vcp_score = safe_float(_first_present_value(
+        candidate,
+        "vcp_effective_score",
+        "vcp_effective",
+        "vcpEffective",
+        "vcpEffectiveScore",
+        "vcp_display_score",
+        "vcp_display",
+        "vcpDisplay",
+        "vcpDisplayScore",
+        "vcp_raw_score",
+        "vcp_raw",
+        "vcpRaw",
+        "vcpRawScore",
+        "vcp_score",
+        "vcpScore",
+    ))
+    if vcp_score is None:
+        failed.append("VCP_SCORE_MISSING")
+    elif vcp_score < 60:
+        failed.append("VCP_SCORE_BELOW_60")
+
+    vcp_status = str(_first_present_value(candidate, "vcp_status", "vcpStatus", "vcp_diagnosis", "vcpDiagnosis") or "").upper()
+    if not vcp_status:
+        failed.append("VCP_STATUS_MISSING")
+    elif vcp_status == "REVERSE_EXPANSION":
+        failed.append("VCP_REVERSE_EXPANSION")
+
+    ma_value = _first_present_value(
+        candidate,
+        "ma_alignment_flag",
+        "ma_alignment",
+        "ma_status",
+        "ma_aligned",
+        "is_ma_aligned",
+        "movingAverageAligned",
+        "moving_average_aligned",
+    )
+    ma_aligned = _is_ma_aligned(ma_value)
+    if ma_aligned is None:
+        failed.append("MA_ALIGNMENT_MISSING")
+    elif not ma_aligned:
+        failed.append("MA_NOT_ALIGNED")
+
+    box_depth = safe_float(_first_present_value(candidate, "box_depth_pct", "boxDepthPct", "box_depth", "box_depth_percent"))
+    if box_depth is None:
+        box_depth = safe_float(_first_present_value(candidate, "breakout_distance_pct", "box_distance_pct", "boxDistancePct"))
+    if box_depth is None:
+        breakout_pct_for_depth = safe_float(_first_present_value(candidate, "box_breakout_pct", "breakout_pct", "boxBreakoutPct"))
+        if breakout_pct_for_depth is not None:
+            box_depth = abs(min(breakout_pct_for_depth, 0.0))
+    if box_depth is None:
+        failed.append("BOX_DEPTH_MISSING")
+    elif box_depth > 20:
+        failed.append("BOX_DEPTH_OVER_20")
+
+    breakout_status = str(_first_present_value(candidate, "breakout_status", "breakoutStatus", "box_breakout_flag", "boxBreakoutFlag", "breakout_state") or "").upper()
+    box_distance = safe_float(_first_present_value(candidate, "breakout_distance_pct", "box_distance_pct", "boxDistancePct"))
+    valid_breakout_statuses = {"VALID_BREAKOUT", "BREAKOUT_CONFIRMED", "BREAKOUT_VALID"}
+    pre_breakout_statuses = {"PRE_BREAKOUT", "NEAR_BREAKOUT", "HIGH_CONSOLIDATION", "IN_BOX_NEAR_PIVOT"}
+    is_valid_breakout = breakout_status in valid_breakout_statuses
+    is_pre_breakout = breakout_status in pre_breakout_statuses
+    is_in_box_near = breakout_status == "IN_BOX" and box_distance is not None and box_distance <= 3.0
+    if not breakout_status:
+        failed.append("BREAKOUT_STATUS_MISSING")
+    elif not (is_valid_breakout or is_pre_breakout or is_in_box_near):
+        failed.append("BREAKOUT_STATUS_NOT_READY")
+
+    if is_valid_breakout:
+        volume_ratio = safe_float(_first_present_value(candidate, "volumeRatio", "volume_ratio", "breakout_volume_ratio", "breakoutVolumeRatio"))
+        if volume_ratio is None:
+            failed.append("VOLUME_RATIO_MISSING")
+        elif volume_ratio < 1.5:
+            failed.append("VOLUME_RATIO_BELOW_1_5")
+
+    avg_trading_value = safe_float(_first_present_value(
+        candidate,
+        "liquidity_trading_value",
+        "trading_value",
+        "tradingValue",
+        "raw_trading_value",
+        "calculated_trading_value",
+        "liquidity_avg_trading_value",
+        "avg_trading_value_krw",
+        "average_trading_value_krw",
+        "avg_trading_value",
+        "average_trading_value",
+    ))
+    min_trading_value = safe_float(
+        _first_present_value(context, "min_trading_value_krw", "minTradingValueKrw")
+        or _first_present_value(candidate, "min_trading_value_krw", "minTradingValueKrw")
+    )
+    if avg_trading_value is None:
+        failed.append("AVG_TRADING_VALUE_MISSING")
+    if min_trading_value is None:
+        failed.append("MIN_TRADING_VALUE_MISSING")
+    elif avg_trading_value is not None and avg_trading_value < min_trading_value:
+        failed.append("AVG_TRADING_VALUE_BELOW_MIN")
+
+    regime_raw = _first_present_value(context, "market_regime", "marketRegime", "dominant_regime", "dominantRegime")
+    if isinstance(regime_raw, dict):
+        regime_raw = regime_raw.get("dominant_regime") or regime_raw.get("dominantRegime")
+    regime = str(regime_raw or _first_present_value(candidate, "dominant_regime", "dominantRegime", "market_regime", "marketRegime") or "").upper()
+    if not regime:
+        failed.append("MARKET_REGIME_MISSING")
+    elif regime in {"RISK_OFF", "CRISIS"}:
+        failed.append("MARKET_REGIME_RISK")
+
+    data_quality = str(_first_present_value(candidate, "data_quality", "dataQuality", "data_quality_status", "dataQualityStatus", "data_unit_check", "dataUnitCheck", "data_status", "dataStatus") or "").upper()
+    liquidity_status = str(_first_present_value(candidate, "liquidity_status") or "").upper()
+    fatal_data_values = {"FATAL", "ERROR", "INVALID", "DATA_UNIT_WARNING", "DATA_MISSING"}
+    if not data_quality:
+        failed.append("DATA_QUALITY_MISSING")
+    elif data_quality in fatal_data_values:
+        failed.append("DATA_QUALITY_FATAL")
+    if bool(candidate.get("data_unit_warning_flag")) or bool(candidate.get("vcp_data_missing")):
+        failed.append("DATA_QUALITY_FATAL")
+    if liquidity_status in {"LIQUIDITY_UNCERTAIN", "DATA_MISSING", "ILLIQUID"}:
+        failed.append("DATA_QUALITY_FATAL")
+
+    # Stable order with duplicates removed.
+    failed = list(dict.fromkeys(failed))
+    passed = not failed
+    return {
+        "buy_gate_passed": passed,
+        "buyGatePassed": passed,
+        "failed_buy_gates": failed,
+        "failedBuyGates": failed,
+        "buy_gate_reason": "PASS" if passed else ", ".join(failed),
+        "buyGateReason": "PASS" if passed else ", ".join(failed),
+        "screening_mode": mode,
+        "screeningMode": mode,
+    }
+
+
+def evaluate_buy_candidate_gates(candidate: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return get_buy_candidate_gate_result(candidate, context)
+
+
+def infer_final_label(row: Dict[str, Any]) -> str:
+    """Map legacy tier/alert fields to user-facing AlphaForge labels."""
+    explicit = str(
+        row.get("final_label")
+        or row.get("finalLabel")
+        or row.get("display_label")
+        or row.get("displayLabel")
+        or row.get("display_watch_alert_type")
+        or ""
+    ).strip()
+    if explicit in DISPLAY_LABELS and explicit != "BUY_CANDIDATE":
+        return explicit
+
+    bucket = str(row.get("primary_bucket", row.get("final_class", "")) or "").upper()
+    if bucket == "REJECTED":
+        return "REJECTED"
+
     raw_type = str(row.get("watch_alert_type") or "NONE")
-    if raw_type in {"ACTION_ALERT", "RISK_WATCH", "DATA_REVIEW", "SETUP_WATCH"}:
-        return raw_type
+    buy_gate_passed = bool(row.get("buy_gate_passed", row.get("buyGatePassed", False)))
+    failed_buy_gates = as_reason_list(row.get("failed_buy_gates", row.get("failedBuyGates")))
+    risk_status = (
+        str(row.get("vcp_status") or "") in {"REVERSE_EXPANSION", "RALLY_EXHAUSTION"}
+        or bool(row.get("vcp_rally_exhaustion_flag", False))
+        or str(row.get("breakout_status") or "") == "FAILED_BREAKOUT"
+        or str(row.get("liquidity_status") or "") == "LIQUIDITY_UNCERTAIN"
+        or bool(row.get("data_unit_warning_flag", False))
+        or str(row.get("data_unit_check") or "") == "DATA_UNIT_WARNING"
+    )
+
+    if risk_status:
+        return "RISK_WATCH"
+    if buy_gate_passed:
+        if bucket == "TIER_3" and raw_type == "ACTION_ALERT":
+            return "PRIORITY_WATCH"
+        return "BUY_CANDIDATE"
+    if 0 < len(failed_buy_gates) <= 2 and not (bucket == "TIER_3" and raw_type == "ACTION_ALERT"):
+        return "NEAR_BUY"
+
+    if raw_type == "ACTION_ALERT":
+        if bucket in {"TIER_1", "TIER_2"}:
+            return "NEAR_BUY"
+        return "PRIORITY_WATCH"
+    if raw_type in {"RISK_WATCH", "DATA_REVIEW"}:
+        return "RISK_WATCH"
+    if raw_type == "SETUP_WATCH":
+        return "SETUP_WATCH"
     if not bool(row.get("watch_alert_flag", row.get("watchlist_flag", False))):
-        return "NONE"
+        if bucket in {"TIER_1", "TIER_2"}:
+            return "NEAR_BUY"
+        return "SETUP_WATCH"
     if bool(row.get("action_alert_flag", False)):
-        return "ACTION_ALERT"
+        if bucket in {"TIER_1", "TIER_2"}:
+            return "NEAR_BUY"
+        return "PRIORITY_WATCH"
     if str(row.get("liquidity_status") or "") == "LIQUIDITY_UNCERTAIN" or bool(row.get("data_unit_warning_flag", False)):
-        return "DATA_REVIEW"
+        return "RISK_WATCH"
     if str(row.get("vcp_status") or "") in {"REVERSE_EXPANSION", "RALLY_EXHAUSTION"}:
         return "RISK_WATCH"
     if str(row.get("breakout_status") or "") == "FAILED_BREAKOUT":
         return "RISK_WATCH"
-    if str(row.get("primary_bucket") or "") == "WATCHLIST":
-        return "SETUP_WATCH"
-    return "NONE"
+    return "SETUP_WATCH"
+
+
+def infer_display_watch_alert_type(row: Dict[str, Any]) -> str:
+    return infer_final_label(row)
 
 
 def extract_display_reasons_from_classification_text(
@@ -574,6 +855,8 @@ def normalize_result_schema(row: Dict[str, Any], run_context: Optional[Dict[str,
         "candidate_confidence": str(row.get("candidate_confidence", "WEAK")),
         "watch_alert_flag": bool(row.get("watch_alert_flag", row.get("watchlist_flag", False))),
         "watch_alert_type": str(row.get("watch_alert_type", "NONE")),
+        "legacy_label": str(row.get("legacy_label", row.get("watch_alert_type", row.get("alert_type", "NONE")))),
+        "legacyLabel": str(row.get("legacyLabel", row.get("legacy_label", row.get("watch_alert_type", row.get("alert_type", "NONE"))))),
         "action_alert_flag": bool(row.get("action_alert_flag", False)),
         "data_unit_warning_flag": bool(row.get("data_unit_warning_flag", False)),
         "liquidity_status": str(row.get("liquidity_status", "ILLIQUID")),
@@ -608,7 +891,22 @@ def normalize_result_schema(row: Dict[str, Any], run_context: Optional[Dict[str,
     row["display_watch_alert_reasons"] = row["watch_alert_reasons_display"]
     row["watch_alert_exclusion_reasons"] = watch_alert_exclusion_raw
     row["watch_alert_exclusion_reasons_display"] = normalize_display_reason_list(watch_alert_exclusion_raw, primary_bucket)
-    row["display_watch_alert_type"] = infer_display_watch_alert_type(row)
+    if "buy_gate_passed" not in row and "buyGatePassed" not in row:
+        row.update(get_buy_candidate_gate_result(row, run_context or {}))
+    else:
+        failed_buy_gates = as_reason_list(row.get("failed_buy_gates", row.get("failedBuyGates")))
+        row["failed_buy_gates"] = failed_buy_gates
+        row["failedBuyGates"] = failed_buy_gates
+        row["buy_gate_reason"] = str(row.get("buy_gate_reason", row.get("buyGateReason", "")))
+        row["buyGateReason"] = str(row.get("buyGateReason", row.get("buy_gate_reason", "")))
+    final_label = infer_final_label(row)
+    row["display_watch_alert_type"] = final_label
+    row["display_label"] = final_label
+    row["displayLabel"] = final_label
+    row["final_label"] = final_label
+    row["finalLabel"] = final_label
+    row["display_label_text"] = DISPLAY_LABEL_TEXT.get(final_label, final_label)
+    row["final_label_text"] = DISPLAY_LABEL_TEXT.get(final_label, final_label)
     row["display_watch_alert_label"] = build_display_fields({**row, "watch_alert_type": row["display_watch_alert_type"]}).get("alert_display", "")
     row["watch_alert_decision_trace"] = str(row.get("watch_alert_decision_trace", ""))
     row["vcp_penalty_reasons"] = as_reason_list(row.get("vcp_penalty_reasons"))
@@ -625,6 +923,7 @@ def normalize_result_schema(row: Dict[str, Any], run_context: Optional[Dict[str,
     row["display_rejected_reasons_str"] = "; ".join(row["display_rejected_reasons"])
     row["display_restriction_reasons_str"] = "; ".join(row["display_restriction_reasons"])
     row["display_watch_alert_reasons_str"] = "; ".join(row["display_watch_alert_reasons"])
+    row["failed_buy_gates_str"] = "; ".join(row.get("failed_buy_gates", []))
     row["vcp_diagnostic"] = (
         f"raw {row.get('vcp_raw_score')} → effective {row.get('vcp_effective_score')} → display {row.get('vcp_display_score')}"
         f" | {rejected_vcp_diagnostic_label(row)}"
@@ -637,7 +936,7 @@ def normalize_result_schema(row: Dict[str, Any], run_context: Optional[Dict[str,
 def build_display_fields(row: Dict[str, Any]) -> Dict[str, Any]:
     """Compute UI-friendly fields for cards/CSV/clipboard. Pure function."""
     bucket = str(row.get("primary_bucket", "REJECTED"))
-    alert_type = str(row.get("watch_alert_type", "NONE"))
+    alert_type = infer_final_label(row)
 
     bucket_label_map = {
         "TIER_1": "Tier 1 실전 매수",
@@ -648,27 +947,39 @@ def build_display_fields(row: Dict[str, Any]) -> Dict[str, Any]:
         "REJECTED": "Rejected 제외",
     }
     alert_emoji_map = {
-        "ACTION_ALERT": "🚨",
+        "BUY_CANDIDATE": "◎",
+        "NEAR_BUY": "○",
+        "PRIORITY_WATCH": "★",
         "RISK_WATCH": "⚠️",
-        "DATA_REVIEW": "🧪",
-        "SETUP_WATCH": "👀",
+        "SETUP_WATCH": "◇",
+        "REJECTED": "",
+        "ACTION_ALERT": "★",
+        "DATA_REVIEW": "⚠️",
         "NONE": "",
     }
     alert_label_map = {
-        "ACTION_ALERT": "ACTION ALERT",
+        "BUY_CANDIDATE": "BUY CANDIDATE",
+        "NEAR_BUY": "NEAR BUY",
+        "PRIORITY_WATCH": "PRIORITY WATCH",
         "RISK_WATCH": "RISK WATCH",
-        "DATA_REVIEW": "DATA REVIEW",
         "SETUP_WATCH": "SETUP WATCH",
+        "REJECTED": "REJECTED",
+        "ACTION_ALERT": "PRIORITY WATCH",
+        "DATA_REVIEW": "RISK WATCH",
         "NONE": "",
     }
 
     return {
         "bucket_display": bucket_label_map.get(bucket, bucket),
+        "display_label": alert_type,
+        "display_label_text": DISPLAY_LABEL_TEXT.get(alert_type, alert_type),
+        "final_label": alert_type,
+        "final_label_text": DISPLAY_LABEL_TEXT.get(alert_type, alert_type),
         "alert_emoji": alert_emoji_map.get(alert_type, ""),
         "alert_label": alert_label_map.get(alert_type, ""),
         "alert_display": (
             f"{alert_emoji_map.get(alert_type, '')} [{alert_label_map.get(alert_type, '')}]"
-            if alert_type and alert_type != "NONE" and bool(row.get("watch_alert_flag"))
+            if alert_type and alert_type not in {"NONE", "REJECTED"} and bool(row.get("watch_alert_flag"))
             else ""
         ),
     }
@@ -723,7 +1034,7 @@ def classify_primary_bucket(row: Dict[str, Any]) -> Tuple[str, str, List[str], L
 
     rejected_reasons = []
     if rs_val < 50 and rs_status not in {"Strong", "DATA_MISSING"}: rejected_reasons.append("RS 50 미만")
-    if vcp_status == "NOT_READY": rejected_reasons.append("VCP 미형성(NOT_READY)")
+    if vcp_status in VCP_NO_VCP_STATUSES: rejected_reasons.append(f"VCP 미형성({vcp_status})")
     if breakout_status == "FAILED_BREAKOUT": rejected_reasons.append("돌파 실패(FAILED_BREAKOUT)")
     if vcp_status == "REVERSE_EXPANSION" or "역수축" in vcp_warn: rejected_reasons.append("VCP 역수축")
     if flow_total <= 5: rejected_reasons.append("수급 극히 약함")
@@ -745,14 +1056,15 @@ def classify_primary_bucket(row: Dict[str, Any]) -> Tuple[str, str, List[str], L
     if not is_ma_aligned: t1_restrictions.append("이평선 비정렬")
     if breakout_status not in {"BREAKOUT_CONFIRMED", "NEAR_BREAKOUT", "HIGH_CONSOLIDATION"}:
         t1_restrictions.append(f"돌파 {breakout_status}")
-    if vcp_status not in {"VCP_STRICT", "VCP_VALID"}:
+    if vcp_status not in VCP_CONFIRMED_STATUSES:
         t1_restrictions.append(f"VCP 상태 부적합({vcp_status})")
     if dist_val > 7.0: t1_restrictions.append(f"박스권 깊음({dist_val:.1f}%)")
     if "거래량 부족" in box_warn or (breakout_status == "BREAKOUT_CONFIRMED" and "D" in breakout_grade):
         t1_restrictions.append("돌파 거래량 부족")
 
     t2_restrictions = []
-    if vcp_status in {"REVERSE_EXPANSION", "NOT_READY"}: t2_restrictions.append("VCP 역수축")
+    if vcp_status == "REVERSE_EXPANSION": t2_restrictions.append("VCP 역수축")
+    if vcp_status in VCP_NO_VCP_STATUSES: t2_restrictions.append("VCP 미형성")
     if breakout_status == "FAILED_BREAKOUT": t2_restrictions.append("돌파 실패 상태")
     if rs_val < 50 and rs_status not in {"Strong", "DATA_MISSING"}: t2_restrictions.append("RS 저조")
     if ma_flag == "NOT_ALIGNED": t2_restrictions.append("이평선 역배열")
@@ -776,12 +1088,12 @@ def classify_primary_bucket(row: Dict[str, Any]) -> Tuple[str, str, List[str], L
         reason = f"REJECTED: [복합 약점] {', '.join(rejected_reasons)}"
     elif (is_rs_80 and is_liquid and is_ma_aligned and
           breakout_status in {"BREAKOUT_CONFIRMED", "NEAR_BREAKOUT", "HIGH_CONSOLIDATION"} and
-          vcp_status in {"VCP_STRICT", "VCP_VALID"} and not t1_restrictions):
+          vcp_status in VCP_CONFIRMED_STATUSES and not t1_restrictions):
         bucket = "TIER_1"
         reason = "Tier 1: [실전 매수 후보] 핵심 필터 모두 통과"
     elif (is_rs_80 and is_liquid and is_ma_aligned and
           breakout_status in {"IN_BOX", "NEAR_BREAKOUT", "BREAKOUT_CONFIRMED", "HIGH_CONSOLIDATION"} and
-          vcp_status in {"VCP_STRICT", "VCP_VALID", "VCP_WARNING", "BASE_BUILDING"} and not t2_restrictions):
+          vcp_status in VCP_CONFIRMED_STATUSES | VCP_FORMING_STATUSES and not t2_restrictions):
         bucket = "TIER_2"
         reason = f"Tier 2: [강한 주도주 후보 / 확인 대기] {', '.join(t1_restrictions[:2])}로 Tier 1 제한"
     elif (not rejected_reasons and (is_rs_80 or total >= 120)):
@@ -790,10 +1102,10 @@ def classify_primary_bucket(row: Dict[str, Any]) -> Tuple[str, str, List[str], L
     else:
         valid_watch_reasons = []
         if "대형주 품질" in quality_factors:
-            if is_rs_60 or flow_total >= 20 or dist_val <= 7.0 or vcp_status in {"VCP_VALID", "BASE_BUILDING", "VCP_STRICT"} or is_ma_aligned:
+            if is_rs_60 or flow_total >= 20 or dist_val <= 7.0 or vcp_status in VCP_CONFIRMED_STATUSES | VCP_FORMING_STATUSES or is_ma_aligned:
                 valid_watch_reasons.append("대형주 품질+보조강점")
         if "수급 강함" in quality_factors:
-            if is_rs_50 or dist_val <= 10.0 or is_ma_aligned or vcp_status in {"VCP_VALID", "BASE_BUILDING", "VCP_STRICT"}:
+            if is_rs_50 or dist_val <= 10.0 or is_ma_aligned or vcp_status in VCP_CONFIRMED_STATUSES | VCP_FORMING_STATUSES:
                 valid_watch_reasons.append("수급 강함+보조강점")
         if "RS 리더십" in quality_factors: valid_watch_reasons.append("RS 리더십")
         if "박스권 상단 근접" in quality_factors: valid_watch_reasons.append("박스권 상단 근접")
@@ -808,7 +1120,7 @@ def classify_primary_bucket(row: Dict[str, Any]) -> Tuple[str, str, List[str], L
             bucket = "WATCHLIST"
             # WATCHLIST 라벨: 결함 사유가 있는데 RS 리더십으로 구제된 경우 Risk Watch
             has_reverse = vcp_status == "REVERSE_EXPANSION" or "역수축" in vcp_warn
-            has_rally = vcp_status == "RALLY_EXHAUSTION"
+            has_rally = vcp_status == "RALLY_EXHAUSTION" or bool(row.get("vcp_rally_exhaustion_flag", False))
             has_failed_breakout = breakout_status == "FAILED_BREAKOUT"
             if has_reverse and rs_val >= 80:
                 reason = (
@@ -884,9 +1196,9 @@ def build_promotion_reasons(
         # 3) 구조 강점
         if ma_flag == "ALIGNED" and dist_val <= 7.0:
             promotion_reasons.append("정배열 + 박스권 허용 범위")
-        if vcp_status in {"VCP_STRICT", "VCP_VALID"}:
+        if vcp_status in VCP_CONFIRMED_STATUSES:
             promotion_reasons.append(f"VCP 정상({vcp_status})")
-        elif vcp_status in {"VCP_WARNING", "BASE_BUILDING"}:
+        elif vcp_status in VCP_FORMING_STATUSES:
             promotion_reasons.append(f"{vcp_status} 허용")
         if breakout_status == "BREAKOUT_CONFIRMED":
             promotion_reasons.append("돌파 확정")
@@ -906,7 +1218,7 @@ def build_promotion_reasons(
             watchlist_reasons.append("RS 리더십 유지")
         elif rs_val >= 60:
             watchlist_reasons.append("RS 보통+")
-        if vcp_status in {"BASE_BUILDING", "VCP_VALID", "VCP_WARNING"}:
+        if vcp_status in VCP_CONFIRMED_STATUSES | VCP_FORMING_STATUSES:
             watchlist_reasons.append(f"베이스 형성({vcp_status})")
         if dist_val <= 5.0:
             watchlist_reasons.append("박스권 상단 근접")
@@ -947,9 +1259,9 @@ def build_feature_based_promotion_reasons(row: Dict[str, Any]) -> List[str]:
     if ma in {"ALIGNED", "정배열"}:
         reasons.append("정배열")
 
-    if vcp_status in {"VCP_WARNING", "BASE_BUILDING"}:
+    if vcp_status in VCP_FORMING_STATUSES:
         reasons.append(f"{vcp_status} 허용")
-    elif vcp_status in {"VCP_VALID", "VCP_STRICT"}:
+    elif vcp_status in VCP_CONFIRMED_STATUSES:
         reasons.append("VCP 구조 양호")
     elif vcp_status == "RALLY_EXHAUSTION":
         reasons.append("RALLY_EXHAUSTION 리스크 관찰")
@@ -1009,7 +1321,7 @@ def build_feature_based_watchlist_reasons(row: Dict[str, Any]) -> List[str]:
     elif box_depth is not None and box_depth <= 10:
         reasons.append("박스권 상단 근접")
 
-    if watch_type == "RISK_WATCH" or vcp_status in {"REVERSE_EXPANSION", "RALLY_EXHAUSTION"}:
+    if watch_type == "RISK_WATCH" or vcp_status in {"REVERSE_EXPANSION", "RALLY_EXHAUSTION"} or bool(row.get("vcp_rally_exhaustion_flag", False)):
         reasons.append("RISK_WATCH 대상")
     elif watch_type == "DATA_REVIEW":
         reasons.append("DATA_REVIEW 대상")
@@ -1169,7 +1481,7 @@ def classify_watch_alert(row: Dict[str, Any]) -> Tuple[bool, str, bool, List[str
         elif ma_flag == "ALIGNED":
             reasons.append("RS_LEADERSHIP_ALIGNED")
             trace.append("RS 80+ 정배열 선정")
-    elif rs_val >= 50 and bucket == "WATCHLIST" and vcp_status in {"BASE_BUILDING", "VCP_VALID"}:
+    elif rs_val >= 50 and bucket == "WATCHLIST" and vcp_status in VCP_CONFIRMED_STATUSES | VCP_FORMING_STATUSES:
         # Setup Watch: RS 보통+ + 베이스 형성
         reasons.append("SETUP_WATCH_CANDIDATE")
         trace.append("RS 50~80 + 베이스 형성 선정")
@@ -1203,7 +1515,7 @@ def classify_watch_alert(row: Dict[str, Any]) -> Tuple[bool, str, bool, List[str
     if rs_val < 50:
         exclusions.append("LOW_RS_BLOCK")
         trace.append("RS 50 미만 차단")
-    if vcp_status == "RALLY_EXHAUSTION":
+    if vcp_status == "RALLY_EXHAUSTION" or bool(row.get("vcp_rally_exhaustion_flag", False)):
         exclusions.append("RALLY_EXHAUSTION_RISK")
         trace.append("랠리 피로도 — Action 차단")
     # 수급 극히 취약은 TIER_2 리더십이 아닌 한 알림 차단
@@ -1220,13 +1532,13 @@ def classify_watch_alert(row: Dict[str, Any]) -> Tuple[bool, str, bool, List[str
         # Action 가능 조건
         if (
             bucket in {"TIER_1", "TIER_2", "TIER_3"} and rs_val >= 80
-            and vcp_status in {"VCP_STRICT", "VCP_VALID", "VCP_WARNING", "BASE_BUILDING", "HIGH_CONSOLIDATION"}
+            and vcp_status in VCP_CONFIRMED_STATUSES | VCP_FORMING_STATUSES
             and breakout_status in {"IN_BOX", "NEAR_BREAKOUT", "BREAKOUT_CONFIRMED", "HIGH_CONSOLIDATION"}
             and liquidity_status == "LIQUID"
         ):
             alert_type = "ACTION_ALERT"
             action_flag = True
-            trace.append("Action Alert 발동")
+            trace.append("Priority Watch 표시(legacy ACTION_ALERT)")
         elif rs_val >= 80 and bucket in {"TIER_2", "TIER_3"}:
             alert_type = "SETUP_WATCH"
             trace.append("Setup Watch 선정 (RS 강함이나 Action 조건 미달)")
@@ -1520,7 +1832,7 @@ def validate_policy_invariants(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 POLICY_METADATA = {
     "name": "AlphaForge Policy Engine",
     "version": "v6.2",
-    "description": "Rule-based classification policy for Tier, Watch Alert, VCP confidence, and candidate confidence.",
+    "description": "Rule-based classification policy for Tier, display labels, VCP confidence, and candidate confidence.",
     "score_max_default": DEFAULT_SCORE_MAX,
     "features": [
         "primary_bucket_classification",
@@ -1541,6 +1853,8 @@ POLICY_METADATA = {
         "SETUP_WATCH",
         "NONE",
     ],
+    "display_labels": sorted(DISPLAY_LABELS),
+    "screening_modes": ["EXPLORE_MODE", "STRICT_MODE", "HYBRID_MODE"],
     "invariants": [
         "REJECTED cannot have watch_alert_flag=True",
         "REVERSE_EXPANSION cannot be ACTION_ALERT",

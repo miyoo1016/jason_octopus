@@ -25,6 +25,8 @@ DUAL_HORIZON_FIELDS = (
     "short_reasons",
     "position_reasons",
 )
+VCP_CONFIRMED_STATUSES = {"VCP_STRICT", "VCP_VALID", "VCP_CONFIRMED"}
+VCP_FORMING_STATUSES = {"VCP_WARNING", "BASE_BUILDING", "HIGH_CONSOLIDATION", "NEAR_SETUP", "VCP_FORMING", "CONTRACTION_WARN"}
 
 
 def _is_missing(value: Any) -> bool:
@@ -179,7 +181,7 @@ def _score_short_horizon(row: pd.Series) -> tuple[int, list[str]]:
 
     if alert_type == "ACTION_ALERT":
         score += 16
-        reasons.append("ACTION_ALERT")
+        reasons.append("PRIORITY_WATCH")
     elif alert_type in {"SETUP_WATCH", "RISK_WATCH"}:
         score += 6
         reasons.append(alert_type)
@@ -197,6 +199,7 @@ def _score_position_horizon(row: pd.Series) -> tuple[int, list[str]]:
     reasons: list[str] = []
     rs = _safe_float(_first_present(row, "rs_percentile", "rs_rating", "rs_score"))
     vcp_status = str(_first_present(row, "vcp_status") or "")
+    vcp_rally_flag = bool(_first_present(row, "vcp_rally_exhaustion_flag"))
     ma_flag = str(_first_present(row, "ma_alignment_flag") or "")
     flow_score = _safe_float(_first_present(row, "flow_total_score", "stock_flow_score", "final_flow_bias", "flow_score"))
     tier = str(_first_present(row, "primary_bucket", "candidate_status") or "")
@@ -217,13 +220,13 @@ def _score_position_horizon(row: pd.Series) -> tuple[int, list[str]]:
             score -= 12
             reasons.append(f"RS 약함 {rs:.1f}")
 
-    if vcp_status in {"VCP_STRICT", "VCP_VALID"}:
+    if vcp_status in VCP_CONFIRMED_STATUSES:
         score += 22
         reasons.append(vcp_status)
-    elif vcp_status in {"VCP_WARNING", "BASE_BUILDING", "HIGH_CONSOLIDATION", "NEAR_SETUP"}:
+    elif vcp_status in VCP_FORMING_STATUSES:
         score += 12
         reasons.append(f"구조 관찰 {vcp_status}")
-    elif vcp_status in {"RALLY_EXHAUSTION", "REVERSE_EXPANSION"}:
+    elif vcp_status in {"RALLY_EXHAUSTION", "REVERSE_EXPANSION"} or vcp_rally_flag:
         score -= 12
         reasons.append(f"VCP 위험 {vcp_status}")
 
@@ -303,9 +306,10 @@ def _has_short_momentum(row: pd.Series, short_score: int) -> bool:
 
 def _horizon_label(short_score: int, position_score: int, row: pd.Series) -> str:
     vcp_status = str(_first_present(row, "vcp_status") or "")
+    vcp_rally_flag = bool(_first_present(row, "vcp_rally_exhaustion_flag"))
     breakout_status = str(_first_present(row, "breakout_status") or "")
     tier = str(_first_present(row, "primary_bucket", "candidate_status") or "")
-    has_risk_flag = vcp_status in {"RALLY_EXHAUSTION", "REVERSE_EXPANSION"} or breakout_status == "FAILED_BREAKOUT"
+    has_risk_flag = vcp_status in {"RALLY_EXHAUSTION", "REVERSE_EXPANSION"} or vcp_rally_flag or breakout_status == "FAILED_BREAKOUT"
     box_attempt = _has_box_attempt(row)
     short_quality = _has_short_quality(row)
     short_momentum = _has_short_momentum(row, short_score)
@@ -355,13 +359,28 @@ def add_dual_horizon_fields(final_df: pd.DataFrame) -> pd.DataFrame:
 
 def _candidate_record(row: pd.Series, generated_at: str) -> dict[str, Any]:
     primary_bucket = _first_present(row, "primary_bucket", "candidate_status", "tier")
+    legacy_label = _first_present(row, "legacy_label", "watch_alert_type", "alert_type")
+    display_label = _first_present(row, "final_label", "display_label", "display_watch_alert_type")
     return {
         "symbol": _first_present(row, "symbol", "code"),
         "name": _first_present(row, "name"),
         "tier": primary_bucket,
         "alert_type": _first_present(row, "watch_alert_type", "display_watch_alert_type"),
+        "legacy_label": legacy_label,
+        "legacyLabel": legacy_label,
+        "display_label": display_label,
+        "displayLabel": display_label,
+        "final_label": display_label,
+        "finalLabel": display_label,
+        "buy_gate_passed": _first_present(row, "buy_gate_passed", "buyGatePassed"),
+        "failed_buy_gates": _combined_list(row, "failed_buy_gates", "failedBuyGates"),
+        "buy_gate_reason": _first_present(row, "buy_gate_reason", "buyGateReason"),
         "rs": _first_present(row, "rs_percentile", "rs_rating", "rs_score"),
         "vcp_status": _first_present(row, "vcp_status"),
+        "vcp_component_scores": _first_present(row, "vcp_component_scores", "vcpComponentScores"),
+        "vcpComponentScores": _first_present(row, "vcpComponentScores", "vcp_component_scores"),
+        "vcp_quality_reason": _first_present(row, "vcp_quality_reason", "vcpQualityReason"),
+        "vcpQualityReason": _first_present(row, "vcpQualityReason", "vcp_quality_reason"),
         "box_upper_price": _first_present(
             row,
             "box_upper_price",
@@ -558,8 +577,18 @@ def _history_record(
         "name": _first_present(row, "name"),
         "tier": _first_present(row, "primary_bucket", "candidate_status", "tier"),
         "alert_type": _first_present(row, "watch_alert_type", "display_watch_alert_type"),
+        "legacy_label": _first_present(row, "legacy_label", "watch_alert_type", "alert_type"),
+        "display_label": _first_present(row, "final_label", "display_label", "display_watch_alert_type"),
+        "final_label": _first_present(row, "final_label", "display_label", "display_watch_alert_type"),
+        "buy_gate_passed": _first_present(row, "buy_gate_passed", "buyGatePassed"),
+        "failed_buy_gates": _combined_list(row, "failed_buy_gates", "failedBuyGates"),
+        "buy_gate_reason": _first_present(row, "buy_gate_reason", "buyGateReason"),
         "rs": _first_present(row, "rs_percentile", "rs_rating", "rs_score"),
         "vcp_status": _first_present(row, "vcp_status"),
+        "vcp_component_scores": _first_present(row, "vcp_component_scores", "vcpComponentScores"),
+        "vcpComponentScores": _first_present(row, "vcpComponentScores", "vcp_component_scores"),
+        "vcp_quality_reason": _first_present(row, "vcp_quality_reason", "vcpQualityReason"),
+        "vcpQualityReason": _first_present(row, "vcpQualityReason", "vcp_quality_reason"),
         "box_upper_price": _first_present(
             row,
             "box_upper_price",

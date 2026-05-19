@@ -21,12 +21,13 @@
         `[종목 상세 리스트]`,
       ].join('\n');
 
-      // Watch Alert type → 텍스트 매핑
+      // 화면용 관찰 라벨 → 텍스트 매핑
       const _alertTypeText = {
-        'ACTION_ALERT': '🚨 [ACTION ALERT]',
+        'BUY_CANDIDATE': '◎ [BUY CANDIDATE]',
+        'NEAR_BUY': '○ [NEAR BUY]',
+        'PRIORITY_WATCH': '★ [PRIORITY WATCH]',
         'RISK_WATCH':   '⚠️ [RISK WATCH]',
-        'DATA_REVIEW':  '🧪 [DATA REVIEW]',
-        'SETUP_WATCH':  '👀 [SETUP WATCH]',
+        'SETUP_WATCH':  '◇ [SETUP WATCH]',
       };
 
       const rows = data.map((row, i) => {
@@ -58,6 +59,10 @@
         const downList = row.display_restriction_reasons || row.downgrade_reasons || [];
         const down = row.display_restriction_reasons_str || row.downgrade_reasons_str || (Array.isArray(downList) ? downList.join('; ') : String(downList || ''));
         const downVal = down && down !== '없음' && down !== '[]' ? down : '없음';
+        const failedBuyGates = row.failed_buy_gates || row.failedBuyGates || [];
+        const buyGateText = row.buy_gate_passed || row.buyGatePassed
+          ? 'PASS'
+          : (Array.isArray(failedBuyGates) ? failedBuyGates.join('; ') : String(failedBuyGates || row.buy_gate_reason || row.buyGateReason || ''));
 
         const mc = typeof formatCap === 'function' ? formatCap(row.market_cap) : (row.market_cap || '-');
         const flowText = row.flow_total_score != null ? row.flow_total_score : (row.flow_score ?? '-');
@@ -73,8 +78,9 @@
           `   - 총점: ${scoreInfo.totalScore} / ${scoreInfo.scoreMax} (Tier ${row.tier || '-'})`,
           `   - ${promoLabel}: ${promoVal}`,
           `   - 제한 사유: ${downVal}`,
+          `   - BUY 게이트: ${buyGateText || '없음'}`,
           `   - 지표: RS ${row.rs_rating || 0}, VCP ${row.vcp_score || 0}, 수급 ${flowText}`,
-          `   - VCP 진단: ${row.vcp_diagnostic || `raw ${row.vcp_raw_score ?? '-'} → effective ${row.vcp_effective_score ?? '-'} → display ${row.vcp_display_score ?? row.vcp_score ?? '-'}`}`,
+          `   - VCP 진단: ${row.vcp_diagnostic || row.vcp_quality_reason || row.vcpQualityReason || `raw ${row.vcp_raw_score ?? '-'} → effective ${row.vcp_effective_score ?? '-'} → display ${row.vcp_display_score ?? row.vcp_score ?? '-'}`}`,
           `   - 유동성: ${row.liquidity_status || '-'} (${typeof formatCap === 'function' ? formatCap(row.liquidity_trading_value) : (row.liquidity_trading_value || '-')})`,
           `     (Vol: ${row.liquidity_volume || 0} / Source: ${row.liquidity_volume_source || ''} / Suspicious: ${row.volume_suspicious ? '🔴 YES' : 'NO'})`,
           `   - 시총: ${mc} | 섹터: ${row.sector || '기타'}`,
@@ -102,12 +108,13 @@
       if (!data.length) return;
       
       const priorityCols = [
-        "code", "name", "primary_bucket", "watchlist_flag", "watch_alert_type", "display_watch_alert_type",
+        "code", "name", "primary_bucket", "watchlist_flag", "watch_alert_type", "legacy_label", "display_watch_alert_type", "display_label", "final_label",
+        "buy_gate_passed", "failed_buy_gates", "buy_gate_reason",
         "action_alert_flag", "tier", "total_score", "score_max",
         "tier_reason", "display_promotion_reasons", "display_rejected_reasons", "promotion_reasons", "rejected_reasons",
         "display_restriction_reasons", "downgrade_reasons", "sector", "market_cap",
         "vcp_score", "vcp_raw_score", "vcp_effective_score", "vcp_display_score", "vcp_status", "vcp_confidence",
-        "vcp_cross_warning", "vcp_penalty_reasons", "candidate_confidence", "vcp_diagnostic",
+        "vcp_cross_warning", "vcp_component_scores", "vcp_quality_reason", "vcp_penalty_reasons", "candidate_confidence", "vcp_diagnostic",
         "vcp_warning", "breakout_status", "box_breakout_grade",
         "rs_rating", "flow_total_score", "foreign_net_buy", "institution_net_buy",
         "liquidity_status", "liquidity_trading_value", "liquidity_trading_value_source",
@@ -125,6 +132,7 @@
         csv += cols.map(c => {
           let val = r[c] ?? '';
           if (Array.isArray(val)) val = val.join('; ');
+          if (val && typeof val === 'object') val = JSON.stringify(val);
           val = String(val);
           if (val.includes(',') || val.includes('\n') || val.includes('"')) {
             val = `"${val.replace(/"/g, '""')}"`;

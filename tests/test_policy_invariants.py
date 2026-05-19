@@ -471,8 +471,8 @@ class TestBuildDisplayFields:
             "watch_alert_type": "ACTION_ALERT",
         }
         d = build_display_fields(row)
-        assert d["alert_emoji"] == "🚨"
-        assert d["alert_label"] == "ACTION ALERT"
+        assert d["alert_emoji"] == "○"
+        assert d["alert_label"] == "NEAR BUY"
         assert d["bucket_display"] == "Tier 2 주도주 후보"
 
     def test_risk_watch_display(self):
@@ -491,7 +491,8 @@ class TestBuildDisplayFields:
             "watch_alert_flag": True,
             "watch_alert_type": "DATA_REVIEW",
         })
-        assert d["alert_emoji"] == "🧪"
+        assert d["alert_emoji"] == "⚠️"
+        assert d["alert_label"] == "RISK WATCH"
 
     def test_rejected_display(self):
         d = build_display_fields({"primary_bucket": "REJECTED", "watch_alert_flag": False})

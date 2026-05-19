@@ -8,6 +8,27 @@ const API_FALLBACK_BASES = [
   'http://127.0.0.1:8081',
 ];
 
+const SCREENING_MODES = {
+  or: {
+    code: 'EXPLORE_MODE',
+    label: '탐색 모드',
+    shortLabel: 'EXPLORE_MODE / 탐색 모드',
+    description: '탐색 모드입니다. 강점이 하나라도 있는 종목을 관찰 후보로 남깁니다. 매수 후보가 아니라 감시 후보입니다.',
+  },
+  and: {
+    code: 'STRICT_MODE',
+    label: '엄격 후보 모드',
+    shortLabel: 'STRICT_MODE / 엄격 후보 모드',
+    description: '엄격 후보 모드입니다. 주요 조건을 모두 통과한 종목만 실전 후보로 분류합니다.',
+  },
+  hybrid: {
+    code: 'HYBRID_MODE',
+    label: '셋업 모드',
+    shortLabel: 'HYBRID_MODE / 셋업 모드',
+    description: '셋업 모드입니다. 구조가 살아있는 후보를 추가 확인 대상으로 분류합니다.',
+  },
+};
+
 function apiBaseCandidates() {
   const bases = [];
   if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
@@ -131,13 +152,13 @@ const SIGNAL_META = {
     // [FIX] vcp_status 기반 데이터 인식 태그 — DATA_MISSING이면 ✓ 표시 금지
     makeTag: row => {
       const status = row.vcp_status;
-      if (status === 'VCP_STRICT' || status === 'VCP_VALID') return { label: 'VCP ✓', cls: 'ev-accent' };
-      if (status === 'HIGH_CONSOLIDATION' || status === 'NEAR_SETUP' || status === 'BASE_BUILDING') return { label: 'VCP 셋업', cls: 'ev-blue' };
+      if (status === 'VCP_STRICT' || status === 'VCP_VALID' || status === 'VCP_CONFIRMED') return { label: 'VCP ✓', cls: 'ev-accent' };
+      if (status === 'VCP_FORMING' || status === 'HIGH_CONSOLIDATION' || status === 'NEAR_SETUP' || status === 'BASE_BUILDING') return { label: 'VCP 셋업', cls: 'ev-blue' };
       if (status === 'STRONG_LEADER_NO_PIVOT') return { label: 'VCP (피벗 부재)', cls: 'ev-blue' };
-      if (status === 'VCP_WARNING' || status === 'RALLY_EXHAUSTION') return { label: 'VCP 주의', cls: 'ev-red' };
+      if (status === 'CONTRACTION_WARN' || status === 'VCP_WARNING' || status === 'RALLY_EXHAUSTION') return { label: 'VCP 주의', cls: 'ev-red' };
       if (status === 'REVERSE_EXPANSION') return { label: 'VCP 역수축', cls: 'ev-red' };
       if (status === 'DATA_MISSING') return { label: 'VCP 데이터 부족', cls: 'ev-red' };
-      if (status === 'NOT_READY') return { label: 'VCP 미형성', cls: 'ev-red' };
+      if (status === 'NO_VCP' || status === 'NOT_READY') return { label: 'VCP 미형성', cls: 'ev-red' };
       return { label: `VCP ${status || '-'}`, cls: 'ev-red' };
     },
   },
@@ -648,6 +669,14 @@ function buildDAG(enabledIds) {
     const nodeId = nid();
     let params = { ...(state.signalParams[sigId] || {}), ...(sig.fixedParams || {}) };
     if (sig.transformParams) params = { ...params, ...sig.transformParams(state.signalParams[sigId] || {}) };
+    if (sigId === 'score_filter') {
+      const liquidityParams = state.signalParams.liquidity_filter || {};
+      params = {
+        ...params,
+        screening_mode: (SCREENING_MODES[state.combine] || SCREENING_MODES.and).code,
+        min_trading_value_krw: (Number(liquidityParams.min_trading_value_krw) || 20) * 1e8,
+      };
+    }
     nodes.push({ id: nodeId, type: sigId, params });
     return nodeId;
   };
@@ -727,6 +756,12 @@ function renderResults(result, elapsedMs, enabledIds) {
   document.getElementById('statRate').textContent = preFilterRate + '%';
   document.getElementById('statLatency').textContent = elapsedMs + 'ms';
 
+  if (result.summary && result.summary.performance_summary) {
+    renderPerformance(result.summary.performance_summary);
+  }
+  if (result.summary && result.summary.operation_report) {
+    renderOperationReport(result.summary.operation_report);
+  }
   const allData = structuredRows.length ? structuredRows : (lastNode?.data || []);
 
   // ── 시총 구간 필터 적용 ─────────────────────────────────────────
@@ -783,20 +818,22 @@ function renderResults(result, elapsedMs, enabledIds) {
     else if (bucket === 'REJECTED') bucketDisplay = 'Rejected 제외';
 
     const tierBadge = `<span class="tier-badge ${tierCls}" title="${tierReason}">${bucketDisplay}</span>`;
-    // [FIX] Watch Alert type별 분리 표시 (ACTION/RISK_WATCH/DATA_REVIEW/SETUP_WATCH)
+    // [FIX] 화면용 라벨은 legacy ACTION_ALERT를 완화해서 표시
     const alertType = getDisplayWatchAlertType(row);
     const _alertConfig = {
-      'ACTION_ALERT': { emoji: '🚨', label: 'ACTION ALERT', bg: 'var(--accent)' },
+      'BUY_CANDIDATE': { emoji: '◎', label: 'BUY CANDIDATE', bg: '#047857' },
+      'NEAR_BUY': { emoji: '○', label: 'NEAR BUY', bg: '#2563eb' },
+      'PRIORITY_WATCH': { emoji: '★', label: 'PRIORITY WATCH', bg: '#7c3aed' },
       'RISK_WATCH':   { emoji: '⚠️', label: 'RISK WATCH',   bg: '#f59e0b' },
-      'DATA_REVIEW':  { emoji: '🧪', label: 'DATA REVIEW',  bg: '#0ea5e9' },
-      'SETUP_WATCH':  { emoji: '👀', label: 'SETUP WATCH',  bg: '#6366f1' },
+      'SETUP_WATCH':  { emoji: '◇', label: 'SETUP WATCH',  bg: '#6366f1' },
+      'REJECTED': { emoji: '', label: 'REJECTED', bg: '#6b7280' },
     };
     const _alertCfg = _alertConfig[alertType];
     const alertTitle = (asArray(row.display_watch_alert_reasons).length ? asArray(row.display_watch_alert_reasons) : asArray(row.watch_alert_reasons_display)).join('; ') || alertType;
-    const watchAlertBadge = (getWatchAlert(row) && _alertCfg)
+    const watchAlertBadge = (_alertCfg && (getWatchAlert(row) || ['BUY_CANDIDATE', 'NEAR_BUY', 'PRIORITY_WATCH'].includes(alertType)))
       ? `<span class="tier-badge" style="background:${_alertCfg.bg};color:white;margin-left:4px;" title="${alertTitle}">${_alertCfg.emoji} ${_alertCfg.label}</span>`
       : (row.watchlist_flag
-        ? `<span class="tier-badge" style="background:var(--accent);color:white;margin-left:4px;">🚨 Watch Alert</span>`
+        ? `<span class="tier-badge" style="background:var(--accent);color:white;margin-left:4px;">관찰 라벨</span>`
         : '');
     const tierReasonHtml = tierReason ? `<span class="tier-reason">${tierReason}</span>` : '';
 
@@ -837,10 +874,20 @@ function renderResults(result, elapsedMs, enabledIds) {
     const flowScoreBase = row.flow_total_score != null ? row.flow_total_score : (row.flow_score != null ? row.flow_score : '-');
     const hasPendingFlow = row.foreign_net_buy == null || row.institution_net_buy == null || Number(row.foreign_net_buy) === 0 || Number(row.institution_net_buy) === 0;
     const flowScore = hasPendingFlow && flowScoreBase !== '-' ? `${flowScoreBase} (전일 기준)` : flowScoreBase;
+    const vcpComponents = row.vcp_component_scores || row.vcpComponentScores;
+    const vcpComponentText = vcpComponents && typeof vcpComponents === 'object'
+      ? Object.entries(vcpComponents)
+          .filter(([key]) => key !== 'component_total' && key !== 'final_raw_score')
+          .map(([key, val]) => `${key}:${val}`)
+          .join(', ')
+      : '';
+    const vcpQualityReason = row.vcp_quality_reason || row.vcpQualityReason || '';
     const vcpDiag = row.vcp_diagnostic ||
       `raw ${row.vcp_raw_score ?? '-'} → effective ${row.vcp_effective_score ?? '-'} → display ${row.vcp_display_score ?? row.vcp_score ?? '-'}` +
       (row.vcp_confidence ? ` | ${row.vcp_confidence}` : '') +
-      (row.vcp_cross_warning ? ` | ${asArray(row.vcp_cross_warning).join('; ') || row.vcp_cross_warning}` : '');
+      (row.vcp_cross_warning ? ` | ${asArray(row.vcp_cross_warning).join('; ') || row.vcp_cross_warning}` : '') +
+      (vcpQualityReason ? ` | ${vcpQualityReason}` : '') +
+      (vcpComponentText ? ` | ${vcpComponentText}` : '');
     const vcpDiagHtml = `<div class="sc-reasons"><span class="sc-reasons-label">VCP 진단:</span> ${vcpDiag}</div>`;
 
     const vixVal  = row.macro_vix != null ? Number(row.macro_vix).toFixed(1) : null;
@@ -850,6 +897,12 @@ function renderResults(result, elapsedMs, enabledIds) {
     const gateStatus = row.gate_status || '-';
     const finalClass = row.final_class || bucket;
     const gateHtml = `<div class="sc-gate"><span>Raw <b>${rawScore}</b></span><span>Gate <b>${gateStatus}</b></span><span>Effective <b>${effectiveScore}</b></span><span>Final <b>${finalClass}</b></span></div>`;
+    const failedBuyGates = asArray(row.failed_buy_gates || row.failedBuyGates);
+    const buyGateHtml = row.buy_gate_passed || row.buyGatePassed
+      ? `<div class="sc-reasons"><span class="sc-reasons-label">BUY 게이트:</span> PASS</div>`
+      : (failedBuyGates.length || row.buy_gate_reason || row.buyGateReason)
+        ? `<div class="sc-reasons"><span class="sc-reasons-label">BUY 게이트 미통과:</span> ${(failedBuyGates.length ? failedBuyGates : [row.buy_gate_reason || row.buyGateReason]).join(' · ')}</div>`
+        : '';
     const warnings = [row.macro_warning, row.flow_data_warning, row.vcp_warning, row.vi_warning].filter(Boolean);
     const warnHtml = warnings.length ? `<div class="sc-warning">${warnings.join(' · ')}</div>` : '';
 
@@ -887,6 +940,7 @@ function renderResults(result, elapsedMs, enabledIds) {
         ${tierReasonHtml}
         ${reasonHtml}
         ${gateHtml}
+        ${buyGateHtml}
         ${vcpDiagHtml}
         <div class="sc-meta">
           <span>종가 <b>${close}</b></span>
@@ -942,26 +996,42 @@ function renderResultSummaryStrip(result) {
   const core = safeNumber(s.core_candidate_count || (s.tier1_count + s.tier2_count));
   const rejected = safeNumber(s.rejected_count || s.final_rejected_count);
   const filtered = safeNumber(s.filtered_count || s.intermediate_filtered_count);
+  const buyCandidateCount = safeNumber(s.buy_candidate_count || s.hard_gate_buy_candidate_count);
+  const nearBuyCount = safeNumber(s.near_buy_count);
 
   const filterRate = s.intermediate_filtered_rate != null ? s.intermediate_filtered_rate : safePercent(filtered, universe);
   const rejectRate = s.final_rejected_rate != null ? s.final_rejected_rate : safePercent(rejected, universe);
   const alertRate = s.watch_alert_rate != null ? s.watch_alert_rate : safePercent(s.watchlist_flag_true_count, universe);
+  const noBuyBanner = buyCandidateCount === 0
+    ? `<div class="no-buy-banner">
+        <strong>${s.no_buy_candidate_message || '오늘 실전 매수 후보 없음'}</strong>
+        <span>${s.watch_only_message || '현재 결과는 관찰 후보이며 자동 매수 신호가 아닙니다.'}</span>
+      </div>`
+      : `<div class="buy-candidate-banner">
+        <strong>${s.buy_candidate_message || '하드 게이트 통과 매수 후보'}</strong>
+        <span>BUY_CANDIDATE ${buyCandidateCount}개가 모든 매수 하드 게이트를 통과했습니다.</span>
+      </div>`;
 
-  return `<div class="diagnostics-panel" style="margin-bottom:12px;">
+  return `${noBuyBanner}<div class="diagnostics-panel" style="margin-bottom:12px;">
     <div class="diagnostics-grid" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));">
       <span>전체 분석 종목 <b>${universe.toLocaleString()}</b></span>
       <span>분류 완료 <b>${classified.toLocaleString()}</b></span>
       <span>핵심 후보(T1+T2) <b>${core}</b></span>
       <span>Tier 1 <b>${safeNumber(s.tier1_count)}</b></span>
       <span>Tier 2 <b>${safeNumber(s.tier2_count)}</b></span>
+      <span>BUY_CANDIDATE <b>${buyCandidateCount}</b></span>
+      <span>NEAR_BUY <b>${nearBuyCount}</b></span>
       <span>Crisis Hold <b>${safeNumber(s.crisis_hold_count)}</b></span>
-      <span>Watch Alert <b>${safeNumber(s.watchlist_flag_true_count)}</b></span>
-      <span>최종 제외(Rejected) <b>${rejected}</b></span>
-      <span>중간 필터 제거 <b>${filtered}</b></span>
-      <span>중간 필터 제거율 <b>${filterRate}%</b></span>
-      <span>최종 제외율 <b>${rejectRate}%</b></span>
-      <span>Watch Alert 비율 <b>${alertRate}%</b></span>
+      <span>Priority Watch <b>${safeNumber(s.priority_watch_count)}</b></span>
+      <span>Risk Watch <b>${safeNumber(s.risk_watch_count)}</b></span>
+      <span>Setup Watch <b>${safeNumber(s.setup_watch_count)}</b></span>
+      <span>최종 리스크 제외 <b>${rejected}</b></span>
+      <span>하드 필터 제거 <b>${filtered}</b></span>
+      <span>하드 필터 제거율 <b>${filterRate}%</b></span>
+      <span>최종 리스크 제외율 <b>${rejectRate}%</b></span>
+      <span>관찰 라벨 비율 <b>${alertRate}%</b></span>
     </div>
+    <div class="diagnostics-note">탐색 모드에서는 하드 필터보다 사후 분류가 우선됩니다.</div>
   </div>
   <div class="market-regime-strip">
     <div><b>Market Regime</b> ${regime.dominant_regime || '-'} <small>보조: ${regime.secondary_regime || '-'}</small></div>
@@ -975,6 +1045,47 @@ function renderResultSummaryStrip(result) {
   </div>`;
 }
 
+function renderOperationReport(report) {
+  const el = document.getElementById('operationReport');
+  if (!el || !report) return;
+
+  const qs = report.quality_score ?? '-';
+  const qsColor = typeof qs === 'number'
+    ? (qs >= 70 ? '#22c55e' : qs >= 40 ? '#f59e0b' : '#ef4444')
+    : 'var(--text-2)';
+
+  const blockingHtml = (report.top_blocking_reasons || []).length
+    ? report.top_blocking_reasons.map(b =>
+        `<li><code>${b.reason}</code> <small>(${b.count}건)</small></li>`
+      ).join('')
+    : '<li style="color:var(--text-3)">차단 사유 없음</li>';
+
+  el.innerHTML = `
+    <div class="op-report-card" style="background:var(--bg-2,#1e1e2e);border:1px solid var(--border,#333);border-radius:10px;padding:14px 18px;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+        <span style="font-weight:700;font-size:14px;">🔍 운영 품질 리포트</span>
+        <span style="font-size:22px;font-weight:900;color:${qsColor};">${qs}</span>
+        <small style="color:var(--text-3);">/ 100 (시스템 출력 품질)</small>
+        <span style="margin-left:auto;font-size:11px;padding:3px 8px;border-radius:12px;background:${report.status === 'READY' ? '#1a4731' : '#3d2c0a'};color:${report.status === 'READY' ? '#4ade80' : '#fbbf24'};">${report.status}</span>
+      </div>
+      <div style="font-size:13px;color:var(--text-1,#cdd6f4);background:var(--bg-3,#313244);border-radius:6px;padding:8px 12px;margin-bottom:10px;">
+        ${report.operator_message || '-'}
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px;font-size:13px;">
+        <span>🟢 매수 후보 <b>${report.buy_candidate_count ?? 0}</b></span>
+        <span>🟡 NEAR_BUY <b>${report.near_buy_count ?? 0}</b></span>
+        <span>🔵 Priority Watch <b>${report.priority_watch_count ?? 0}</b></span>
+        <span>🔴 Risk Watch <b>${report.risk_watch_count ?? 0}</b></span>
+        <span style="color:var(--text-3)">시장 국면: <b>${report.market_mode || '-'}</b></span>
+      </div>
+      ${(report.top_blocking_reasons || []).length ? `
+      <div style="font-size:12px;">
+        <span style="color:var(--text-3);font-weight:600;">주요 차단 사유 Top ${report.top_blocking_reasons.length}</span>
+        <ul style="margin:4px 0 0 12px;padding:0;list-style:disc;color:var(--text-2,#cba6f7);">${blockingHtml}</ul>
+      </div>` : ''}
+    </div>`;
+}
+
 function renderDiagnosticsPanel(result) {
   const d = result.diagnostics;
   if (!d) return '';
@@ -982,7 +1093,7 @@ function renderDiagnosticsPanel(result) {
   const nodeRows = (d.node_counts || []).map(n =>
     `<tr><td>${n.node_id}</td><td>${n.node_type}</td><td>${n.node_role || '-'}</td><td>${n.input_count}</td><td>${n.output_count}</td><td>${n.dropped_count}</td><td>${Math.round(n.elapsed_ms || 0)}ms</td><td>${Math.round((n.missing_ratio || 0) * 100)}%</td></tr>`
   ).join('');
-  
+
   const safeD = (key) => asArray(d[key]).slice(0, 12).map(r => `<li>${r.reason || r} (${r.count || 1})</li>`).join('') || '<li>없음</li>';
 
   const promotionReasons = safeD('tier_promotion_reasons');
@@ -1013,8 +1124,8 @@ function renderDiagnosticsPanel(result) {
       <div><b>Tier 제한 사유</b><ul>${downgradeReasons}</ul></div>
       <div><b>REJECTED (복합 약점 제외)</b><ul>${rejectedReasons}</ul></div>
       <div><b>WATCHLIST (Risk Watch 유지 사유)</b><ul>${riskWatchReasons}</ul></div>
-      <div><b>Watch Alert (True) 사유</b><ul>${watchReasons}</ul></div>
-      <div><b>Watch Alert (False) 사유</b><ul>${watchExclusions}</ul></div>
+      <div><b>관찰 라벨 사유</b><ul>${watchReasons}</ul></div>
+      <div><b>관찰 제외 사유</b><ul>${watchExclusions}</ul></div>
       <div><b>Risk Gate 사유</b><ul>${riskGateReasons}</ul></div>
       <div><b>Hard Gate 사유</b><ul>${hardGateReasons}</ul></div>
       <div><b>NaN 핵심 컬럼</b><ul>${nanCols}</ul></div>
@@ -1061,7 +1172,8 @@ function renderStrategyInsight(enabledIds, combine) {
   if (!card || enabledIds.length === 0) return;
 
   const active = enabledIds.map(id => SIGNAL_META[id]).filter(Boolean);
-  const combineLabel = combine === 'or' ? 'OR — 하나라도 만족' : 'AND — 모두 만족';
+  const mode = SCREENING_MODES[combine] || SCREENING_MODES.and;
+  const combineLabel = mode.shortLabel;
 
   const sigHtml = active.map(m => `
     <div class="insight-sig">
@@ -1081,6 +1193,7 @@ function renderStrategyInsight(enabledIds, combine) {
       <span class="insight-title">💡 전략 해설</span>
       <span class="insight-combine">${combineLabel}</span>
     </div>
+    <div class="insight-mode-desc">${mode.description}</div>
     <div class="insight-sigs">${sigHtml}</div>
     ${comboHtml}
   `;
@@ -1183,23 +1296,36 @@ function getDisplayRejectedReasons(row) {
 }
 
 function getDisplayWatchAlertType(row) {
-  const explicit = row.display_watch_alert_type || row.watch_alert_type || 'NONE';
-  if (['ACTION_ALERT', 'RISK_WATCH', 'DATA_REVIEW', 'SETUP_WATCH'].includes(explicit)) return explicit;
+  const explicit = row.final_label || row.finalLabel || row.display_label || row.displayLabel || row.display_watch_alert_type || '';
+  if (['BUY_CANDIDATE', 'NEAR_BUY', 'PRIORITY_WATCH', 'RISK_WATCH', 'SETUP_WATCH', 'REJECTED'].includes(explicit)) return explicit;
+  if (row.buy_gate_passed || row.buyGatePassed) return 'BUY_CANDIDATE';
+  const failedBuyGates = asArray(row.failed_buy_gates || row.failedBuyGates);
+  if (failedBuyGates.length > 0 && failedBuyGates.length <= 2) return 'NEAR_BUY';
+  const legacy = row.watch_alert_type || 'NONE';
+  if (legacy === 'ACTION_ALERT') {
+    const bucket = getPrimaryBucket(row);
+    return bucket === 'TIER_1' || bucket === 'TIER_2' ? 'NEAR_BUY' : 'PRIORITY_WATCH';
+  }
+  if (legacy === 'DATA_REVIEW') return 'RISK_WATCH';
+  if (legacy === 'RISK_WATCH' || legacy === 'SETUP_WATCH') return legacy;
   if (!getWatchAlert(row)) return 'NONE';
-  if (row.action_alert_flag) return 'ACTION_ALERT';
-  if (row.liquidity_status === 'LIQUIDITY_UNCERTAIN' || row.data_unit_warning_flag) return 'DATA_REVIEW';
+  if (row.action_alert_flag) {
+    const bucket = getPrimaryBucket(row);
+    return bucket === 'TIER_1' || bucket === 'TIER_2' ? 'NEAR_BUY' : 'PRIORITY_WATCH';
+  }
+  if (row.liquidity_status === 'LIQUIDITY_UNCERTAIN' || row.data_unit_warning_flag) return 'RISK_WATCH';
   if (['REVERSE_EXPANSION', 'RALLY_EXHAUSTION'].includes(row.vcp_status) || row.breakout_status === 'FAILED_BREAKOUT') return 'RISK_WATCH';
-  if (getPrimaryBucket(row) === 'WATCHLIST') return 'SETUP_WATCH';
-  return 'NONE';
+  return 'SETUP_WATCH';
 }
 
 function getWatchAlertText(row) {
   const type = getDisplayWatchAlertType(row);
   const text = {
-    ACTION_ALERT: '🚨 [ACTION ALERT]',
+    BUY_CANDIDATE: '◎ [BUY CANDIDATE]',
+    NEAR_BUY: '○ [NEAR BUY]',
+    PRIORITY_WATCH: '★ [PRIORITY WATCH]',
     RISK_WATCH: '⚠️ [RISK WATCH]',
-    DATA_REVIEW: '🧪 [DATA REVIEW]',
-    SETUP_WATCH: '👀 [SETUP WATCH]',
+    SETUP_WATCH: '◇ [SETUP WATCH]',
   };
   return getWatchAlert(row) ? (text[type] || '') : '';
 }
@@ -1339,54 +1465,34 @@ async function updatePerformance() {
   }
 }
 
-function renderPerformance(data) {
-  const updEl = document.getElementById('perfUpdated');
-  if (updEl) updEl.textContent = data.updated_at ? `(${data.updated_at} 기준)` : '';
-
-  // 요약 카드
+function renderPerformance(perf) {
   const sumEl = document.getElementById('perfSummary');
-  if (sumEl && data.d1_summary) {
-    const cards = [1, 2, 3].map(t => {
-      const s = data.d1_summary[`tier${t}`] || {};
-      const hr = s.hit_rate != null ? `${(s.hit_rate * 100).toFixed(0)}%` : '-';
-      const ar = s.avg_return != null ? `${s.avg_return >= 0 ? '+' : ''}${(s.avg_return * 100).toFixed(1)}%` : '-';
-      const cls = t === 1 ? 'tier-1' : t === 2 ? 'tier-2' : 'tier-3';
-      return `<div class="perf-card">
-        <span class="tier-badge ${cls}">Tier ${t}</span>
-        <span class="perf-card-val">${hr}</span><small class="perf-card-sub">익일 양봉률</small>
-        <span class="perf-card-val ${s.avg_return >= 0 ? 'ret-pos' : 'ret-neg'}">${ar}</span><small class="perf-card-sub">평균 수익</small>
-        <span class="perf-card-cnt">${s.measured || 0}/${s.count || 0}건</span>
-      </div>`;
-    }).join('');
-    sumEl.innerHTML = cards;
-  }
-
-  // 상세 테이블
   const tbody = document.getElementById('perfTableBody');
-  if (!tbody) return;
-  const records = (data.records || []).slice().reverse(); // 최신 날짜 먼저
-  if (!records.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="perf-empty">데이터 없음</td></tr>';
+  if (!sumEl || !perf) return;
+
+  if (perf.status === 'DATA_INSUFFICIENT') {
+    sumEl.innerHTML = `<div style="padding:16px;text-align:center;color:var(--text-3);width:100%;">${perf.message || '성과 추적 데이터 부족'}</div>`;
+    if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="perf-empty">데이터 부족</td></tr>';
     return;
   }
-  tbody.innerHTML = records.map(r => {
-    const d1 = r.d1_return != null
-      ? `<span class="${r.d1_return >= 0 ? 'ret-pos' : 'ret-neg'}">${r.d1_return >= 0 ? '+' : ''}${(r.d1_return * 100).toFixed(1)}%</span>`
-      : '<span class="ret-na">-</span>';
-    const d5 = r.d5_return != null
-      ? `<span class="${r.d5_return >= 0 ? 'ret-pos' : 'ret-neg'}">${r.d5_return >= 0 ? '+' : ''}${(r.d5_return * 100).toFixed(1)}%</span>`
-      : '<span class="ret-na">-</span>';
-    const tierCls = r.tier === 1 ? 'tier-1' : r.tier === 2 ? 'tier-2' : 'tier-3';
-    return `<tr>
-      <td>${r.as_of_date || '-'}</td>
-      <td>${r.name || r.code}</td>
-      <td><span class="tier-badge ${tierCls}">T${r.tier}</span></td>
-      <td>${r.total_score ?? '-'}/${r.score_max ?? 210}</td>
-      <td>${r.entry_close ? Number(r.entry_close).toLocaleString() : '-'}</td>
-      <td>${d1}</td>
-      <td>${d5}</td>
-    </tr>`;
-  }).join('');
+
+  let html = '';
+  for (const [label, returns] of Object.entries(perf.by_label || {})) {
+    if (returns.return_5d == null && returns.return_10d == null && returns.max_drawdown_10d_close == null) continue;
+    const r5 = returns.return_5d != null ? `${returns.return_5d >= 0 ? '+' : ''}${returns.return_5d.toFixed(1)}%` : '-';
+    const r10 = returns.return_10d != null ? `${returns.return_10d >= 0 ? '+' : ''}${returns.return_10d.toFixed(1)}%` : '-';
+    const mdd = returns.max_drawdown_10d_close != null ? `${returns.max_drawdown_10d_close.toFixed(1)}%` : '-';
+
+    html += `<div class="perf-card" style="min-width: 200px;">
+      <span class="tier-badge" style="background:#eef2ff;color:#4338ca;">${label}</span>
+      <span class="perf-card-val ${returns.return_5d >= 0 ? 'ret-pos' : 'ret-neg'}">${r5}</span><small class="perf-card-sub">5일 평균</small>
+      <span class="perf-card-val ${returns.return_10d >= 0 ? 'ret-pos' : 'ret-neg'}">${r10}</span><small class="perf-card-sub">10일 평균</small>
+      <span class="perf-card-val ret-neg" style="color: #ef4444;">${mdd}</span><small class="perf-card-sub">종가 기준 MDD</small>
+    </div>`;
+  }
+
+  sumEl.innerHTML = html || '<div style="padding:16px;text-align:center;color:var(--text-3);">표시할 성과 데이터가 없습니다.</div>';
+  if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="perf-empty">상세 데이터는 요약 카드에 통합되었습니다.</td></tr>';
 }
 
 // 페이지 로드 시 타율 데이터 자동 로드

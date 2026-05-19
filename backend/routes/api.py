@@ -255,7 +255,7 @@ def _execute_sync(
         "node_results": node_results,
         "pipeline_diagnostics": pipeline_diagnostics,
     }
-    payload.update(build_analysis_payload(result, node_results))
+    payload.update(build_analysis_payload(result, node_results, as_of_date=as_of_date))
 
     if result.success and not is_single:
         try:
@@ -271,6 +271,10 @@ def _execute_sync(
                         break
             final_export_df = final_df if final_df is not None else pd.DataFrame()
             generated_at = datetime.now().isoformat(timespec="seconds")
+
+            from backend.performance_tracker import save_snapshots
+            save_snapshots(final_export_df, as_of_date)
+
             export_count = export_alphaforge_candidates(final_export_df, generated_at=generated_at)
             logger.info("AlphaForge 후보 export 완료: %s개", export_count)
             dual_count = export_alphaforge_dual_horizon(final_export_df)

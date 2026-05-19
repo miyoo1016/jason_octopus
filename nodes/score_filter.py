@@ -11,17 +11,19 @@ from engine.node_base import BaseNode, ExecutionContext
 logger = logging.getLogger(__name__)
 
 class ScoreFilterParams(BaseModel):
-    pass
+    screening_mode: str = "EXPLORE_MODE"
+    min_trading_value_krw: float = 2_000_000_000.0
 
 class ScoreFilterNode(BaseNode):
     NODE_TYPE      = "score_filter"
-    CACHE_VERSION  = "v12-risk-gate-v3"
+    CACHE_VERSION  = "v13-buy-gate-v1"
     DISPLAY_NAME   = "최종 점수 및 분류"
     DESCRIPTION    = "모든 지표를 합산하고 5단계 Tier 분류 체계를 적용합니다."
     INPUT_ARITY    = 1
     OUTPUT_COLUMNS = (
         "total_score", "raw_score", "effective_score", "final_score",
         "vcp_raw_score", "vcp_effective_score", "vcp_display_score",
+        "vcp_component_scores", "vcpComponentScores", "vcp_quality_reason", "vcpQualityReason",
         "gate_status", "final_class", "primary_bucket", "watchlist_flag", "watch_alert",
         "action_alert_flag", "watch_alert_type", "candidate_confidence",
         "watch_alert_score", "watch_alert_reasons", "watch_alert_exclusion_reasons",
@@ -31,6 +33,8 @@ class ScoreFilterNode(BaseNode):
         "promotion_reasons", "downgrade_reasons", "t2_rejection_reasons",
         "primary_reason", "secondary_reasons", "hard_gate_reasons",
         "risk_gate_reason", "regime_conflict_flag", "risk_flags",
+        "buy_gate_passed", "failed_buy_gates", "buy_gate_reason",
+        "display_label", "final_label", "legacy_label", "screening_mode",
         "stock_flow_score", "market_flow_context", "sector_flow_context", "final_flow_bias",
         "short_swing_score", "position_swing_score", "horizon_label",
         "short_reasons", "position_reasons"
@@ -44,7 +48,9 @@ class ScoreFilterNode(BaseNode):
             build_promotion_reasons, as_reason_list, DEFAULT_SCORE_MAX,
             extract_display_reasons_from_classification_text,
             build_feature_based_promotion_reasons, normalize_display_reason_list,
-            get_display_rejected_reasons, infer_display_watch_alert_type,
+            get_display_rejected_reasons, infer_display_watch_alert_type, infer_final_label,
+            DISPLAY_LABEL_TEXT,
+            get_buy_candidate_gate_result,
             rejected_vcp_diagnostic_label, build_tier2_display_reasons,
             polish_display_reasons,
         )
@@ -195,6 +201,10 @@ class ScoreFilterNode(BaseNode):
         watch_alert_decision_traces = []
         vcp_cross_warnings = []
         candidate_confidences = []
+        buy_gate_passed_list = []
+        failed_buy_gates_list = []
+        buy_gate_reasons = []
+        screening_modes = []
 
         # --- Policy Engine Loop ---
         vcp_raw_scores = []
@@ -293,6 +303,23 @@ class ScoreFilterNode(BaseNode):
             if str(row_data.get("vcp_status", "")) == "REVERSE_EXPANSION":
                 row_risk_flags.append("REVERSE_EXPANSION")
 
+            buy_context = {
+                "screening_mode": params.screening_mode,
+                "min_trading_value_krw": params.min_trading_value_krw,
+                "market_regime": {
+                    "dominant_regime": dominant_regime,
+                },
+            }
+            buy_row = {
+                **row_data,
+                "primary_bucket": final_bucket,
+                "final_class": final_bucket,
+                "gate_status": gate_status,
+                "risk_flags": row_risk_flags,
+                "screening_mode": params.screening_mode,
+            }
+            buy_gate = get_buy_candidate_gate_result(buy_row, buy_context)
+
             # Append to lists
             primary_buckets.append(final_bucket)
             final_classes.append(final_bucket)
@@ -331,6 +358,10 @@ class ScoreFilterNode(BaseNode):
             action_alert_flags.append(is_action)
             policy_violation_counts.append(len(violations))
             policy_violation_records_list.append(violations)
+            buy_gate_passed_list.append(bool(buy_gate["buy_gate_passed"]))
+            failed_buy_gates_list.append(buy_gate["failed_buy_gates"])
+            buy_gate_reasons.append(buy_gate["buy_gate_reason"])
+            screening_modes.append(buy_gate["screening_mode"])
 
         res_df["raw_score"] = res_df["total_score"]
         res_df["gate_status"] = gate_statuses
@@ -366,10 +397,30 @@ class ScoreFilterNode(BaseNode):
         
         res_df["watch_alert_score"] = watch_alert_scores
         res_df["watch_alert_type"] = watch_alert_types
+        res_df["legacy_label"] = watch_alert_types
+        res_df["legacyLabel"] = watch_alert_types
+        res_df["buy_gate_passed"] = buy_gate_passed_list
+        res_df["buyGatePassed"] = buy_gate_passed_list
+        res_df["failed_buy_gates"] = failed_buy_gates_list
+        res_df["failedBuyGates"] = failed_buy_gates_list
+        res_df["buy_gate_reason"] = buy_gate_reasons
+        res_df["buyGateReason"] = buy_gate_reasons
+        res_df["screening_mode"] = screening_modes
+        res_df["screeningMode"] = screening_modes
         res_df["display_watch_alert_type"] = [
             infer_display_watch_alert_type({**res_df.iloc[i].to_dict(), "watch_alert_type": watch_alert_types[i]})
             for i in range(len(res_df))
         ]
+        final_labels = [
+            infer_final_label({**res_df.iloc[i].to_dict(), "watch_alert_type": watch_alert_types[i]})
+            for i in range(len(res_df))
+        ]
+        res_df["display_label"] = final_labels
+        res_df["displayLabel"] = final_labels
+        res_df["final_label"] = final_labels
+        res_df["finalLabel"] = final_labels
+        res_df["display_label_text"] = [DISPLAY_LABEL_TEXT.get(label, label) for label in final_labels]
+        res_df["final_label_text"] = [DISPLAY_LABEL_TEXT.get(label, label) for label in final_labels]
         res_df["action_alert_flag"] = action_alert_flags
         res_df["watch_alert_reasons_raw"] = watchlist_flag_reasons
         res_df["watch_alert_reasons"] = watchlist_flag_reasons
