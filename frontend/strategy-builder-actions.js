@@ -84,11 +84,20 @@
             const topRec = state.results.summary.top_recommendations.find(r => r.code === row.code);
             if (topRec) recRank = topRec.rank;
         }
-        const recScore = row.recommendation_score || row.recommendationScore || 'N/A';
+        let recScoreRaw = row.recommendation_score ?? row.recommendationScore;
+        const recScore = (recScoreRaw == null || Number.isNaN(Number(recScoreRaw)) || recScoreRaw === 'N/A' || recScoreRaw === '') ? 0 : recScoreRaw;
         const recSize = row.suggested_position_size || row.suggestedPositionSize || 0;
         const recReason = row.recommendation_reason || row.recommendationReason || '';
-        const recTrigger = row.entry_trigger || row.entryTrigger || '';
-        const recInvalidation = row.invalidation_condition || row.invalidationCondition || '';
+        let recTrigger = row.entry_trigger || row.entryTrigger || '';
+        let recInvalidation = row.invalidation_condition || row.invalidationCondition || '';
+
+        if (recAction === 'WATCH_ONLY') {
+            if (!recTrigger) recTrigger = 'VCP 재형성 + 돌파 거래량 확인 전까지 진입 금지';
+            if (!recInvalidation) recInvalidation = 'RS 80 이탈, 이평선 비정렬 지속, 변동성 확장 지속';
+        } else if (recAction === 'AVOID') {
+            if (!recTrigger) recTrigger = '매수 대상 아님. RS/VCP/이평선/수급 조건 재충족 시 재평가';
+            if (!recInvalidation) recInvalidation = '회피 유지. 복합 약점 해소 전까지 진입 금지';
+        }
 
         // TIER → '승격 사유', WATCHLIST/CRISIS_HOLD → '관찰 사유', REJECTED → '제외 사유'
         const promoLabel = bucket.startsWith('TIER') ? '승격 사유'
