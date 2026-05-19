@@ -202,6 +202,23 @@ def test_analysis_summary_buy_now_warning():
     assert summary["top_recommendations_message"] == "BUY_NOW 없음. 조건부/소액탐색 후보만 존재"
     print("✅ test_analysis_summary_buy_now_warning passed")
 
+
+def test_js_report_generator_output():
+    import os
+    import re
+    js_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "strategy-builder-actions.js"))
+    with open(js_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # 실제 JS 템플릿에 해당 필드들이 렌더링되도록 삽입되었는지 문자열 검색으로 회귀 확인
+    assert "추천: ${recAction} | 순위 ${recRank} | 점수 ${recScore} | 권장비중 ${recSize}%" in content, "추천 필드 누락"
+    assert "추천 사유: ${recReason}" in content, "추천 사유 누락"
+    assert "진입 트리거: ${recTrigger}" in content, "진입 트리거 누락"
+    assert "무효화 조건: ${recInvalidation}" in content, "무효화 조건 누락"
+    assert "BUY_NOW 없음. 조건부/소액탐색 후보만 존재" in content, "BUY_NOW 부재 경고 누락"
+    assert "[오늘의 추천 TOP 3]" in content, "Top 3 헤더 누락"
+    print("✅ test_js_report_generator_output passed")
+
 if __name__ == "__main__":
     test_buy_candidate_is_buy_now()
     test_samsung_electro_mechanics_starter_position()
@@ -213,4 +230,5 @@ if __name__ == "__main__":
     test_rank_logic_in_analysis_summary()
     test_recommendation_formatter()
     test_analysis_summary_buy_now_warning()
+    test_js_report_generator_output()
     print("\n🎉 All tests passed!")

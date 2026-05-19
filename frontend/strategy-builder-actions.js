@@ -11,6 +11,15 @@
 
       const enabled = Array.from(state.enabledSignals);
       const today = new Date().toISOString().slice(0, 10);
+      let topRecsText = '';
+      if (state.results && state.results.summary && state.results.summary.top_recommendations && state.results.summary.top_recommendations.length > 0) {
+        const topRecs = state.results.summary.top_recommendations;
+        topRecsText = `[오늘의 추천 TOP 3]`;
+        const hasBuyNow = topRecs.some(r => r.action === 'BUY_NOW');
+        const warningLine = !hasBuyNow ? `\nBUY_NOW 없음. 조건부/소액탐색 후보만 존재` : '';
+        const recsLines = '\n' + topRecs.map((r, idx) => `${idx + 1}. ${r.name} — ${r.action} / ${r.size}% / 점수 ${r.score}`).join('\n');
+        topRecsText += warningLine + recsLines + `\n`;
+      }
 
       const header = [
         `[AlphaForge 시스템 분석 요약]`,
@@ -18,8 +27,9 @@
         `대상 시장: ${state.market || 'KR'}`,
         `분류 완료: ${data.length}건`,
         ``,
+        topRecsText ? topRecsText : '',
         `[종목 상세 리스트]`,
-      ].join('\n');
+      ].join('\n').replace(/\n\n\n/g, '\n\n');
 
       // 화면용 관찰 라벨 → 텍스트 매핑
       const _alertTypeText = {
@@ -67,6 +77,19 @@
         const mc = typeof formatCap === 'function' ? formatCap(row.market_cap) : (row.market_cap || '-');
         const flowText = row.flow_total_score != null ? row.flow_total_score : (row.flow_score ?? '-');
 
+        // 추천 필드 추출 (alias 허용)
+        const recAction = row.recommendation_action || row.recommendationAction || 'WATCH_ONLY';
+        let recRank = row.recommendation_rank || row.recommendationRank || 'N/A';
+        if (recRank === 'N/A' && state.results && state.results.summary && state.results.summary.top_recommendations) {
+            const topRec = state.results.summary.top_recommendations.find(r => r.code === row.code);
+            if (topRec) recRank = topRec.rank;
+        }
+        const recScore = row.recommendation_score || row.recommendationScore || 'N/A';
+        const recSize = row.suggested_position_size || row.suggestedPositionSize || 0;
+        const recReason = row.recommendation_reason || row.recommendationReason || '';
+        const recTrigger = row.entry_trigger || row.entryTrigger || '';
+        const recInvalidation = row.invalidation_condition || row.invalidationCondition || '';
+
         // TIER → '승격 사유', WATCHLIST/CRISIS_HOLD → '관찰 사유', REJECTED → '제외 사유'
         const promoLabel = bucket.startsWith('TIER') ? '승격 사유'
           : (bucket === 'WATCHLIST' || bucket === 'CRISIS_HOLD') ? '관찰 사유'
@@ -81,6 +104,10 @@
           `   - BUY 게이트: ${buyGateText || '없음'}`,
           `   - 지표: RS ${row.rs_rating || 0}, VCP ${row.vcp_score || 0}, 수급 ${flowText}`,
           `   - VCP 진단: ${row.vcp_diagnostic || row.vcp_quality_reason || row.vcpQualityReason || `raw ${row.vcp_raw_score ?? '-'} → effective ${row.vcp_effective_score ?? '-'} → display ${row.vcp_display_score ?? row.vcp_score ?? '-'}`}`,
+          `   - 추천: ${recAction} | 순위 ${recRank} | 점수 ${recScore} | 권장비중 ${recSize}%`,
+          `   - 추천 사유: ${recReason}`,
+          `   - 진입 트리거: ${recTrigger}`,
+          `   - 무효화 조건: ${recInvalidation}`,
           `   - 유동성: ${row.liquidity_status || '-'} (${typeof formatCap === 'function' ? formatCap(row.liquidity_trading_value) : (row.liquidity_trading_value || '-')})`,
           `     (Vol: ${row.liquidity_volume || 0} / Source: ${row.liquidity_volume_source || ''} / Suspicious: ${row.volume_suspicious ? '🔴 YES' : 'NO'})`,
           `   - 시총: ${mc} | 섹터: ${row.sector || '기타'}`,
