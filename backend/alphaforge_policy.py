@@ -545,6 +545,43 @@ def evaluate_buy_candidate_gates(candidate: Dict[str, Any], context: Optional[Di
     return get_buy_candidate_gate_result(candidate, context)
 
 
+def _is_near_buy_eligible(row: Dict[str, Any]) -> bool:
+    """NEAR_BUY 최소 자격 조건.
+
+    VCP 점수 44 이하이거나 NO_VCP 상태이거나 REVERSE_EXPANSION이면 NEAR_BUY 금지.
+    RS < 80이면 NEAR_BUY 금지.
+    breakout_status가 완전히 준비 안 된 상태(NOT_READY 계열)이면서 VCP도 낮으면 금지.
+    """
+    vcp_score = safe_float(
+        row.get("vcp_display_score")
+        or row.get("vcp_effective_score")
+        or row.get("vcp_score")
+        or 0
+    )
+    vcp_status = str(row.get("vcp_status") or "")
+    rs = safe_float(row.get("rs_percentile") or row.get("rs_rating") or row.get("rs_score") or 0)
+    failed_gates = as_reason_list(row.get("failed_buy_gates") or row.get("failedBuyGates"))
+    breakout = str(row.get("breakout_status") or "")
+
+    # VCP 30~44 또는 NO_VCP → NEAR_BUY 금지
+    if vcp_status == "NO_VCP" or (vcp_score is not None and vcp_score < 45):
+        return False
+    # REVERSE_EXPANSION → NEAR_BUY 금지 (이미 risk_status에서 걸리지만 이중 방어)
+    if vcp_status == "REVERSE_EXPANSION" or "VCP_REVERSE_EXPANSION" in failed_gates:
+        return False
+    # RS < 80 → NEAR_BUY 금지
+    if rs is not None and rs < 80:
+        return False
+    # DATA_QUALITY_FATAL → 금지
+    if "DATA_QUALITY_FATAL" in failed_gates:
+        return False
+    # breakout 완전 미준비(NOT_READY 계열) + VCP < 60 → PRIORITY_WATCH로
+    breakout_not_ready = breakout in {"NOT_READY", "BREAKOUT_NOT_READY", "NO_BREAKOUT"}
+    if breakout_not_ready and vcp_score is not None and vcp_score < 60:
+        return False
+    return True
+
+
 def infer_final_label(row: Dict[str, Any]) -> str:
     """Map legacy tier/alert fields to user-facing AlphaForge labels."""
     explicit = str(
@@ -580,12 +617,19 @@ def infer_final_label(row: Dict[str, Any]) -> str:
         if bucket == "TIER_3" and raw_type == "ACTION_ALERT":
             return "PRIORITY_WATCH"
         return "BUY_CANDIDATE"
+    # NEAR_BUY: failed gates 1~2개 + VCP 최소 조건 충족 필요
     if 0 < len(failed_buy_gates) <= 2 and not (bucket == "TIER_3" and raw_type == "ACTION_ALERT"):
-        return "NEAR_BUY"
+        if _is_near_buy_eligible(row):
+            return "NEAR_BUY"
+        # 조건 미충족: PRIORITY_WATCH 또는 SETUP_WATCH로 강등
+        rs_val = safe_float(row.get("rs_percentile") or row.get("rs_rating") or 0) or 0
+        return "PRIORITY_WATCH" if rs_val >= 80 else "SETUP_WATCH"
 
     if raw_type == "ACTION_ALERT":
         if bucket in {"TIER_1", "TIER_2"}:
-            return "NEAR_BUY"
+            if _is_near_buy_eligible(row):
+                return "NEAR_BUY"
+            return "PRIORITY_WATCH"
         return "PRIORITY_WATCH"
     if raw_type in {"RISK_WATCH", "DATA_REVIEW"}:
         return "RISK_WATCH"
@@ -593,11 +637,16 @@ def infer_final_label(row: Dict[str, Any]) -> str:
         return "SETUP_WATCH"
     if not bool(row.get("watch_alert_flag", row.get("watchlist_flag", False))):
         if bucket in {"TIER_1", "TIER_2"}:
-            return "NEAR_BUY"
+            if _is_near_buy_eligible(row):
+                return "NEAR_BUY"
+            rs_val = safe_float(row.get("rs_percentile") or row.get("rs_rating") or 0) or 0
+            return "PRIORITY_WATCH" if rs_val >= 80 else "SETUP_WATCH"
         return "SETUP_WATCH"
     if bool(row.get("action_alert_flag", False)):
         if bucket in {"TIER_1", "TIER_2"}:
-            return "NEAR_BUY"
+            if _is_near_buy_eligible(row):
+                return "NEAR_BUY"
+            return "PRIORITY_WATCH"
         return "PRIORITY_WATCH"
     if str(row.get("liquidity_status") or "") == "LIQUIDITY_UNCERTAIN" or bool(row.get("data_unit_warning_flag", False)):
         return "RISK_WATCH"
@@ -606,6 +655,7 @@ def infer_final_label(row: Dict[str, Any]) -> str:
     if str(row.get("breakout_status") or "") == "FAILED_BREAKOUT":
         return "RISK_WATCH"
     return "SETUP_WATCH"
+
 
 
 def infer_display_watch_alert_type(row: Dict[str, Any]) -> str:
@@ -924,13 +974,38 @@ def normalize_result_schema(row: Dict[str, Any], run_context: Optional[Dict[str,
     row["display_restriction_reasons_str"] = "; ".join(row["display_restriction_reasons"])
     row["display_watch_alert_reasons_str"] = "; ".join(row["display_watch_alert_reasons"])
     row["failed_buy_gates_str"] = "; ".join(row.get("failed_buy_gates", []))
+
+    # vcp_diagnostic: status와 quality_reason 명확히 분리
+    _vcp_status = str(row.get("vcp_status") or "DATA_MISSING")
+    _vcp_diag_label = rejected_vcp_diagnostic_label(row)
+    # CROSS_FACTOR_WEAK / MULTI_WEAK는 quality_reason에만 속함 (vcp_status로 혼용 방지)
+    _vcp_quality_reason = str(row.get("vcp_quality_reason") or "")
+    _cross_warn = row.get("vcp_cross_warning", [])
+    _cross_str = "; ".join(_cross_warn) if _cross_warn else ""
     row["vcp_diagnostic"] = (
         f"raw {row.get('vcp_raw_score')} → effective {row.get('vcp_effective_score')} → display {row.get('vcp_display_score')}"
-        f" | {rejected_vcp_diagnostic_label(row)}"
-        f"{' | ' + '; '.join(row.get('vcp_cross_warning', [])) if row.get('vcp_cross_warning') else ''}"
+        f" | status={_vcp_status}"
+        + (f" | quality_reason={_vcp_diag_label}" if _vcp_diag_label not in (_vcp_status, "NONE") else "")
+        + (f" | cross={_cross_str}" if _cross_str else "")
     )
 
+    # market_cap 단위 과장 경고 (한국 주식 기준 1000조 초과 시 단위 의심)
+    # market_cap 단위 확인 완료: 원 단위 (KRW) 기준.
+    # naver_krx.py: marketValue(억원) × 1억 → 원 단위. formatCap: ÷1e12 → 조 표시.
+    # 2026-05-07 기준 삼성전자 270,500원 × 5.97억주 ≈ 1581조, 정상값.
+    # 경고 임계: 5000조 초과 = 실제 단위 오류 수준에서만 경고 (정상 주가 상승분 오탐 방지)
+    _mcap = safe_float(row.get("market_cap"))
+    _MCAP_KR_SUSPICIOUS_THRESHOLD = 5_000_000_000_000_000  # 5000조 (원 단위, 공식 오류 탐지용)
+    if _mcap and _mcap > _MCAP_KR_SUSPICIOUS_THRESHOLD:
+        row["market_cap_unit_warning"] = (
+            f"시총 {_mcap/1e12:.0f}조 공식 오류 의심 (raw={_mcap:.2e})"
+        )
+        row["data_unit_warning_flag"] = row.get("data_unit_warning_flag", False)  # 기존 플래그는 유지
+    elif not row.get("market_cap_unit_warning"):
+        row["market_cap_unit_warning"] = ""
+
     return row
+
 
 
 def build_display_fields(row: Dict[str, Any]) -> Dict[str, Any]:

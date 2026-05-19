@@ -509,7 +509,12 @@ class VcpNode(BaseNode):
                 "vcpQualityReason": quality_reason,
                 "adjusted_box_limit": round(adjusted_box_limit, 2),
                 "stock_atr_multiplier": round(stock_atr_multiplier, 3),
-                "vcp_warning": " | ".join(warnings) if warnings else status,
+                # vcp_warning: status와 quality_reason을 명확히 분리 표시
+                # CROSS_FACTOR_WEAK/MULTI_WEAK는 status가 아닌 quality_reason에 해당
+                "vcp_warning": (
+                    f"status={status}"
+                    + (f" | reason={' | '.join(warnings)}" if warnings else "")
+                ),
             })
             results.append(row_dict)
 

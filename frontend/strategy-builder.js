@@ -797,7 +797,10 @@ function renderResults(result, elapsedMs, enabledIds) {
     const mktClass = (row.market || '').toLowerCase();
     const close = row.close ? Number(row.close).toLocaleString() : '-';
     const vol   = row.volume ? Number(row.volume).toLocaleString() : '-';
-    const cap   = row.market_cap ? formatCap(row.market_cap) : '-';
+    const capRaw = row.market_cap ? formatCap(row.market_cap) : '-';
+    const capWarn = row.market_cap_unit_warning ? ` ⚠️` : '';
+    const capTitle = row.market_cap_unit_warning || '';
+    const cap = `<span title="${capTitle}">${capRaw}${capWarn}</span>`;
     const evHtml = buildEvidenceTags(row, enabledIds);
 
     const { totalScore, scoreMax } = getScoreInfo(row, result);
