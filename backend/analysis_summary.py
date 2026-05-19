@@ -36,18 +36,18 @@ def _final_dataframe(outputs: dict[str, pd.DataFrame], node_logs: list[Any]) -> 
 def _top_nan_columns(df: pd.DataFrame, limit: int = 10) -> list[dict[str, Any]]:
     if df is None or df.empty:
         return []
-    
+
     # 제외할 설명용 및 레거시 컬럼들
     exclude_terms = (
-        "warning", "reason", "note", "comment", "message", "label", "flag", 
+        "warning", "reason", "note", "comment", "message", "label", "flag",
         "tier", "bucket", "status", "display", "candidates"
     )
-    
+
     core_cols = [
         c for c in df.columns
         if not any(t in str(c).lower() for t in exclude_terms)
     ]
-    
+
     # 핵심 수치 컬럼 우선 순위 (이 중 NaN이 있으면 품질 문제)
     priority_cols = {
         "rs_percentile", "rs_rating", "rs_score", "vcp_score", "breakout_score",
@@ -56,7 +56,7 @@ def _top_nan_columns(df: pd.DataFrame, limit: int = 10) -> list[dict[str, Any]]:
     }
     # [Refinement] 핵심 컬럼 진단 대상을 명시적인 priority_cols로 제한 (raw_trading_value 등 제외)
     core_cols = [c for c in df.columns if c in priority_cols]
-    
+
     counts = df[core_cols].isna().sum().sort_values(ascending=False)
     return [
         {"column": str(col), "nan_count": int(count), "ratio": round(int(count) / len(df), 4)}
@@ -71,7 +71,7 @@ def _top_illiquid(df: pd.DataFrame, limit: int = 12) -> list[dict[str, Any]]:
     # ILLIQUID 상태인 종목들을 거래대금 낮은 순으로 추출
     illiquid = df[df["liquidity_status"] == "ILLIQUID"].copy()
     if illiquid.empty: return []
-    
+
     illiquid = illiquid.sort_values("liquidity_trading_value", ascending=True)
     return [
         {
@@ -115,7 +115,7 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
         final_df = final_df.sort_values("total_score", ascending=False).reset_index(drop=True)
 
     bucket_col = "primary_bucket" if "primary_bucket" in final_df else ("candidate_status" if "candidate_status" in final_df else "")
-    
+
     primary_counts = {
         "TIER_1": 0, "TIER_2": 0, "TIER_3": 0, "WATCHLIST": 0, "CRISIS_HOLD": 0, "REJECTED": 0
     }
@@ -123,7 +123,7 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
         counts = final_df[bucket_col].value_counts().to_dict()
         for k in primary_counts:
             primary_counts[k] = int(counts.get(k, 0))
-            
+
     # [Refinement] denominator가 0인 경우를 방지하는 safePercent 헬퍼
     def safePercent(num, den):
         if not den or den == 0: return 0.0
@@ -131,7 +131,7 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
 
     primary_total_count = int(sum(primary_counts.values()))
     filtered_count = max(universe_count - len(final_df), 0)
-    
+
     w_flag_col = "watchlist_flag" if "watchlist_flag" in final_df else None
     watchlist_flag_true = int(final_df[w_flag_col].fillna(False).astype(bool).sum()) if w_flag_col else 0
     watchlist_flag_false = len(final_df) - watchlist_flag_true
@@ -172,17 +172,17 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
     }
     # [Refinement] NaN 진단에서 제외할 컬럼 리스트 강화
     exclude_terms = (
-        "warning", "reason", "note", "comment", "message", "label", "flag", 
+        "warning", "reason", "note", "comment", "message", "label", "flag",
         "tier", "bucket", "status", "display", "candidates", "primary_bucket", "candidate_status"
     )
-    
+
     for log in logs:
         # 각 노드의 nan_columns 필터링
         filtered_nans = [
             n for n in getattr(log, "nan_columns", [])
             if not any(t in str(n.get("column", "")).lower() for t in exclude_terms)
         ]
-        
+
         item = {
             "node_id": log.node_id,
             "node_type": log.node_type,
@@ -209,7 +209,7 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
                 reasons = [str(r).strip() for r in raw if str(r).strip()]
             else:
                 reasons = [item.strip() for item in str(raw).replace(" / ", sep).split(sep) if item.strip()]
-            
+
             for reason in reasons:
                 counter[reason] += 1
         return [{"reason": r, "count": int(c)} for r, c in counter.most_common(12)]
@@ -221,9 +221,9 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
 
     def _first_value(col: str, default=None):
         if col not in final_df or final_df.empty:
-            return default
+            return defaul
         vals = final_df[col].dropna()
-        return vals.iloc[0] if not vals.empty else default
+        return vals.iloc[0] if not vals.empty else defaul
 
     def _plain(value):
         if isinstance(value, np.ndarray):
@@ -260,7 +260,7 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
             "Data Insufficient": int(final_df["gate_status"].eq("HOLD").sum()) if "gate_status" in final_df else 0,
             "Data Unit Warning": int(final_df["data_unit_check"].eq("DATA_UNIT_WARNING").sum()) if "data_unit_check" in final_df else 0,
         },
-        
+
         # 분포 (Distributions)
         # 분포 (Distributions)
         "vcp_status_distribution": _get_dist("vcp_status"),
@@ -282,7 +282,7 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
         "candidate_confidence_distribution": _get_dist("candidate_confidence"),
         "policy_violation_count": int(final_df["policy_violation_count"].sum()) if "policy_violation_count" in final_df else 0,
         "policy_violation_records": _records(final_df[final_df["policy_violation_count"] > 0][["code", "name", "policy_violation_records"]], 10) if "policy_violation_count" in final_df else [],
-        
+
         # [Refinement] 신규 진단 심볼 리스트
         "action_alert_symbols": final_df[final_df["watch_alert_type"] == "ACTION_ALERT"]["code"].tolist() if "watch_alert_type" in final_df else [],
         "risk_watch_symbols": final_df[final_df["watch_alert_type"] == "RISK_WATCH"]["code"].tolist() if "watch_alert_type" in final_df else [],
@@ -293,7 +293,7 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
         "rally_exhaustion_symbols": final_df[final_df["vcp_status"] == "RALLY_EXHAUSTION"]["code"].tolist() if "vcp_status" in final_df else [],
         "data_unit_warning_symbols": final_df[final_df["data_unit_check"] == "DATA_UNIT_WARNING"]["code"].tolist() if "data_unit_check" in final_df else [],
         "liquidity_uncertain_symbols": final_df[final_df["liquidity_status"] == "LIQUIDITY_UNCERTAIN"]["code"].tolist() if "liquidity_status" in final_df else [],
-        
+
         # 사유 리스트 (Reason lists)
         "tier_promotion_reasons": _agg_reasons("tier_promotion_reasons"),
         "promotion_reasons": _agg_reasons("promotion_reasons"),
@@ -364,18 +364,18 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
     # 경고 및 품질 체크 추가
     if final_df.empty:
         diagnostics["data_quality_warnings"].append("최종 분석 결과가 0행입니다.")
-    
+
     # TIER_2가 있는데 승격 사유가 비어있는지 체크
     if primary_counts["TIER_2"] > 0 and not diagnostics["tier_promotion_reasons"]:
         diagnostics["data_quality_warnings"].append("TIER_2 exists but promotion_reasons are empty")
-        
+
     if universe_count >= 100 and primary_counts["REJECTED"] == 0:
         diagnostics["data_quality_warnings"].append("Rejected 후보가 0개입니다. 기준이 너무 느슨할 수 있습니다.")
-    
+
     # 정합성 체크
     if primary_total_count != len(final_df):
         diagnostics["data_quality_warnings"].append(f"Primary Bucket 합계({primary_total_count})가 결과 행 수({len(final_df)})와 불일치합니다.")
-    
+
     if most_aggressive and most_aggressive["dropped_count"] > 0:
         diagnostics["data_quality_warnings"].append(f"{most_aggressive['node_id']} 노드에서 {most_aggressive['dropped_count']}개가 누락되었습니다.")
     if diagnostics.get("missing_display_rejected_reason_count", 0) > 0:
@@ -397,7 +397,7 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
         "rejected_count": primary_counts["REJECTED"],
         "filtered_count": filtered_count,
         "primary_total_count": primary_total_count,
-        
+
         # [Refinement] 신규 UI 라벨 대응 필드
         "total_analyzed_count": universe_count,
         "classification_completed_count": primary_total_count,
@@ -407,7 +407,7 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
         "intermediate_filtered_rate": safePercent(filtered_count, universe_count),
         "final_rejected_rate": safePercent(primary_counts["REJECTED"], universe_count),
         "watch_alert_rate": safePercent(watchlist_flag_true, universe_count),
-        
+
         "primary_count_total": primary_total_count,  # Compatibility
         "classified_count": primary_total_count,     # Compatibility
         "primary_counts": primary_counts,            # Compatibility
@@ -432,6 +432,39 @@ def build_analysis_payload(result: Any, node_results: dict[str, dict[str, Any]],
     perf_date = as_of_date if as_of_date else (getattr(result, "as_of_date", None) or "")
     perf_summary = get_performance_summary(final_df, perf_date)
     summary["performance_summary"] = perf_summary
+
+    # ── Recommendation Layer Ranking ──
+    if "recommendation_action" in final_df.columns and not final_df.empty:
+        action_priority = {"BUY_NOW": 5, "CONDITIONAL_BUY": 4, "STARTER_POSITION": 3, "WATCH_ONLY": 2, "AVOID": 1}
+        final_df["_action_priority"] = final_df["recommendation_action"].map(action_priority).fillna(0)
+
+        # 정렬: 액션 우선순위 내림차순, 추천 점수 내림차순
+        final_df = final_df.sort_values(by=["_action_priority", "recommendation_score"], ascending=[False, False])
+
+        final_df["recommendation_rank"] = None
+        # BUY_NOW, CONDITIONAL_BUY, STARTER_POSITION 등 상위 3개에 랭크 부여
+        top_mask = final_df["recommendation_action"].isin({"BUY_NOW", "CONDITIONAL_BUY", "STARTER_POSITION"})
+        top_indices = final_df[top_mask].index[:3]
+        for idx, i in enumerate(top_indices):
+            final_df.at[i, "recommendation_rank"] = idx + 1
+
+        final_df = final_df.drop(columns=["_action_priority"])
+
+        # summary에 주입
+        top_recs = []
+        for _, row in final_df[final_df["recommendation_rank"].notna()].sort_values("recommendation_rank").iterrows():
+            top_recs.append({
+                "code": str(row.get("code", "")),
+                "name": str(row.get("name", "")),
+                "action": str(row.get("recommendation_action", "")),
+                "score": int(row.get("recommendation_score", 0)),
+                "rank": int(row.get("recommendation_rank", 0)),
+                "reason": str(row.get("recommendation_reason", "")),
+                "trigger": str(row.get("entry_trigger", "")),
+                "size": int(row.get("suggested_position_size", 0))
+            })
+        summary["top_recommendations"] = top_recs
+
 
     summary["operation_report"] = build_operation_report(
         final_df=final_df,
@@ -498,13 +531,13 @@ def build_operation_report(
 
     # Positive signals
     if buy_candidate_count > 0 or near_buy_count > 0:
-        score += 10  # clear buy-tier labels exist
+        score += 10  # clear buy-tier labels exis
     if not final_df.empty and "failed_buy_gates" in final_df.columns:
         gates_recorded = final_df["failed_buy_gates"].apply(
             lambda x: isinstance(x, list) and len(x) > 0
         ).sum()
         if gates_recorded > 0:
-            score += 10  # gate audit trail present
+            score += 10  # gate audit trail presen
     if perf_status == "READY":
         score += 10  # performance data available
     if not final_df.empty and "vcp_component_scores" in final_df.columns:
@@ -512,7 +545,7 @@ def build_operation_report(
             lambda x: isinstance(x, dict) and len(x) > 0
         ).any()
         if has_component:
-            score += 5  # VCP breakdown present
+            score += 5  # VCP breakdown presen
     if not final_df.empty and "final_label" in final_df.columns:
         score += 5  # labels assigned
 
@@ -529,7 +562,7 @@ def build_operation_report(
     if not final_df.empty and "vcp_component_scores" not in final_df.columns:
         score -= 5  # no VCP component breakdown
     if perf_status == "DATA_INSUFFICIENT":
-        score -= 5  # no performance history yet
+        score -= 5  # no performance history ye
 
     quality_score = max(0, min(100, score))
 

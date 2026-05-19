@@ -393,6 +393,13 @@ def _candidate_record(row: pd.Series, generated_at: str) -> dict[str, Any]:
         ),
         "total_score": _first_present(row, "total_score"),
         "generated_at": generated_at,
+        "recommendation_action": _first_present(row, "recommendation_action"),
+        "recommendation_score": _first_present(row, "recommendation_score"),
+        "recommendation_rank": _first_present(row, "recommendation_rank"),
+        "recommendation_reason": _first_present(row, "recommendation_reason"),
+        "entry_trigger": _first_present(row, "entry_trigger"),
+        "invalidation_condition": _first_present(row, "invalidation_condition"),
+        "suggested_position_size": _first_present(row, "suggested_position_size"),
     }
 
 

@@ -657,6 +657,89 @@ def infer_final_label(row: Dict[str, Any]) -> str:
     return "SETUP_WATCH"
 
 
+def infer_recommendation(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Calculate Recommendation Layer specific fields."""
+    final_label = str(row.get("final_label") or "")
+    if not final_label:
+        final_label = infer_final_label(row)
+
+    buy_gate_passed = bool(row.get("buy_gate_passed", row.get("buyGatePassed", False)))
+    failed_buy_gates = as_reason_list(row.get("failed_buy_gates", row.get("failedBuyGates")))
+    vcp_status = str(row.get("vcp_status") or "")
+    rs = safe_float(row.get("rs_percentile") or row.get("rs_rating") or row.get("rs_score") or 0) or 0
+    vcp_score = safe_float(row.get("vcp_display_score") or row.get("vcp_effective_score") or row.get("vcp_score") or 0) or 0
+
+    ma_flag = str(row.get("ma_alignment_flag", ""))
+    is_ma_aligned = ma_flag in {"ALIGNED", "DATA_MISSING"} or bool(row.get("ma_aligned", False))
+
+    flow_total = safe_float(row.get("flow_total_score") or row.get("flow_score") or row.get("supply_score") or 0) or 0
+    breakout_status = str(row.get("breakout_status") or "")
+
+    fatal_data = "DATA_QUALITY_FATAL" in failed_buy_gates
+    reverse_exp = vcp_status == "REVERSE_EXPANSION" or "VCP_REVERSE_EXPANSION" in failed_buy_gates
+    is_rejected = str(row.get("primary_bucket") or "") == "REJECTED" or final_label == "REJECTED"
+    complex_weakness = is_rejected and (len(as_reason_list(row.get("rejected_reasons"))) > 1)
+
+    action = "WATCH_ONLY"
+    reason = ""
+    trigger = ""
+    invalidation = ""
+    size = 0
+
+    if is_rejected or fatal_data or (rs < 50 and not is_ma_aligned) or complex_weakness:
+        action = "AVOID"
+        reason = "치명적 약점 존재 또는 복합적 결함"
+        size = 0
+    elif reverse_exp:
+        action = "WATCH_ONLY"
+        reason = "RS는 강하지만 역수축/변동성 확장으로 추격 매수 금지"
+        size = 0
+    elif buy_gate_passed or final_label == "BUY_CANDIDATE":
+        action = "BUY_NOW"
+        reason = "모든 매수 게이트 통과, 즉시 진입 가능"
+        size = 40
+        trigger = "현재가 인근 분할 매수"
+        invalidation = "주요 지지선(20MA 또는 박스 하단) 이탈 시 손절"
+    elif rs >= 80 and vcp_score >= 45 and not reverse_exp and is_ma_aligned and not fatal_data and len(failed_buy_gates) <= 3:
+        action = "CONDITIONAL_BUY"
+        reason = "기본 조건 충족. 추가 요건 달성 시 매수 가능"
+        size = 25
+        trigger = "VCP 60 이상 회복 또는 명확한 박스권 돌파"
+        invalidation = "RS 80 이탈 또는 이평선 역배열 전환"
+    elif rs >= 90 and (vcp_score < 45 or vcp_status == "NO_VCP") and is_ma_aligned and flow_total >= 10 and not fatal_data and not reverse_exp and len(failed_buy_gates) <= 3:
+        action = "STARTER_POSITION"
+        reason = "RS 강함, 정배열, 수급 양호, 단 VCP 미형성. 정석 매수 아님, 소액 탐색"
+        size = 15
+        trigger = "VCP 45 이상 회복 또는 박스 상단 돌파 + 거래량 증가"
+        invalidation = "RS 80 이탈, 이평선 비정렬, 박스 하단 이탈"
+    else:
+        action = "WATCH_ONLY"
+        reason = "일부 강점이 있으나 진입 요건 미달"
+        size = 0
+
+    score = 0
+    if rs: score += min(rs / 100.0 * 30, 30)
+    if vcp_score: score += min(vcp_score / 100.0 * 25, 25)
+    if breakout_status in {"NEAR_BREAKOUT", "BREAKOUT_RECENT"}: score += 15
+    elif breakout_status == "IN_BOX": score += 10
+    if is_ma_aligned: score += 10
+    if flow_total: score += min(flow_total / 25.0 * 10, 10)
+
+    if reverse_exp: score -= 20
+    if fatal_data: score -= 30
+    if len(failed_buy_gates) > 3: score -= 10
+
+    score = max(0, min(100, score))
+
+    return {
+        "recommendation_action": action,
+        "recommendation_reason": reason,
+        "entry_trigger": trigger,
+        "invalidation_condition": invalidation,
+        "suggested_position_size": size,
+        "recommendation_score": int(score)
+    }
+
 
 def infer_display_watch_alert_type(row: Dict[str, Any]) -> str:
     return infer_final_label(row)
@@ -847,7 +930,7 @@ def normalize_result_schema(row: Dict[str, Any], run_context: Optional[Dict[str,
         if not display_promotion:
             display_promotion = build_feature_based_promotion_reasons(row)
         display_promotion = polish_display_reasons(row, display_promotion, primary_bucket)
-            
+
         row["promotion_reasons"] = display_promotion
         row["tier_promotion_reasons"] = display_promotion
         row["display_promotion_reasons"] = display_promotion
@@ -866,7 +949,7 @@ def normalize_result_schema(row: Dict[str, Any], run_context: Optional[Dict[str,
         if not display_promotion:
             display_promotion = build_feature_based_watchlist_reasons(row)
         display_promotion = polish_display_reasons(row, display_promotion, primary_bucket)
-            
+
         row["display_promotion_reasons"] = display_promotion
         # WATCHLIST는 내부 promotion_reasons가 []일 수 있으나, display는 반드시 채움
         row.setdefault("promotion_reasons", [])
@@ -1003,6 +1086,11 @@ def normalize_result_schema(row: Dict[str, Any], run_context: Optional[Dict[str,
         row["data_unit_warning_flag"] = row.get("data_unit_warning_flag", False)  # 기존 플래그는 유지
     elif not row.get("market_cap_unit_warning"):
         row["market_cap_unit_warning"] = ""
+
+    # Recommendation Layer 추가
+    row.update(infer_recommendation(row))
+    # Rank는 여기서 아직 처리 불가(전체 집계 후 처리 필요), 빈 값으로 초기화
+    row["recommendation_rank"] = None
 
     return row
 
@@ -1234,7 +1322,7 @@ def build_promotion_reasons(
         - watchlist_reasons에 quality + 셋업 근거
         - promotion_reasons는 빈 list (티어 승격 사유는 아니기 때문)
     REJECTED:
-        - 둘 다 빈 list
+        - 둘 다 빈 lis
     """
     rs_val = float(row.get("rs_percentile", row.get("rs_rating", 0)) or 0)
     vcp_status = str(row.get("vcp_status", ""))
@@ -1953,4 +2041,4 @@ def validate_ai_provider(provider: str) -> str:
     p = str(provider).lower().strip()
     if p in {"gemini", "openai", "anthropic"}:
         return p
-    return "gemini"  # Default
+    return "gemini"  # Defaul

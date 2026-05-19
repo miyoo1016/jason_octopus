@@ -909,6 +909,15 @@ function renderResults(result, elapsedMs, enabledIds) {
     const warnings = [row.macro_warning, row.flow_data_warning, row.vcp_warning, row.vi_warning].filter(Boolean);
     const warnHtml = warnings.length ? `<div class="sc-warning">${warnings.join(' · ')}</div>` : '';
 
+    const recAction = row.recommendation_action || '';
+    const recActionDisplay = row.recommendation_rank ? `Rank ${row.recommendation_rank} | ${recAction}` : recAction;
+    const recBg = recAction === 'BUY_NOW' ? '#047857' : recAction === 'CONDITIONAL_BUY' ? '#2563eb' : recAction === 'STARTER_POSITION' ? '#7c3aed' : recAction === 'AVOID' ? '#ef4444' : '#6b7280';
+    const recBadge = recAction ? `<span class="tier-badge" style="background:${recBg};color:white;margin-left:4px;" title="${row.recommendation_reason || ''}">💡 ${recActionDisplay}</span>` : '';
+
+    const recDetailsHtml = recAction && recAction !== 'WATCH_ONLY' && recAction !== 'AVOID'
+      ? `<div class="sc-reasons"><span class="sc-reasons-label" style="color:${recBg}">추천(${row.recommendation_score}점):</span> ${row.recommendation_reason || ''} (비중: ${row.suggested_position_size || 0}%)<br><span class="sc-reasons-label">진입/손절:</span> ${row.entry_trigger || ''} / ${row.invalidation_condition || ''}</div>`
+      : '';
+
     // 야간/주말 데이터 불안정 경고 배너
     // VIX 미수집 + RS 0점 중 2개 이상 → 결과 신뢰 불가 경고
     const dataUnstableFlags = [
@@ -938,12 +947,14 @@ function renderResults(result, elapsedMs, enabledIds) {
           ${tierBadge}
           ${bucketBadge}
           ${watchAlertBadge}
+          ${recBadge}
           ${surgeBadge}
         </div>
         ${tierReasonHtml}
         ${reasonHtml}
         ${gateHtml}
         ${buyGateHtml}
+        ${recDetailsHtml}
         ${vcpDiagHtml}
         <div class="sc-meta">
           <span>종가 <b>${close}</b></span>
@@ -1015,7 +1026,7 @@ function renderResultSummaryStrip(result) {
         <span>BUY_CANDIDATE ${buyCandidateCount}개가 모든 매수 하드 게이트를 통과했습니다.</span>
       </div>`;
 
-  return `${noBuyBanner}<div class="diagnostics-panel" style="margin-bottom:12px;">
+  let html = `${noBuyBanner}<div class="diagnostics-panel" style="margin-bottom:12px;">
     <div class="diagnostics-grid" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));">
       <span>전체 분석 종목 <b>${universe.toLocaleString()}</b></span>
       <span>분류 완료 <b>${classified.toLocaleString()}</b></span>
@@ -1046,6 +1057,24 @@ function renderResultSummaryStrip(result) {
     </div>
     <div class="regime-meta">기준일 ${regime.as_of || '-'} · 데이터 상태 ${regime.data_status || '-'}</div>
   </div>`;
+
+  if (s.top_recommendations && s.top_recommendations.length > 0) {
+    const recHtml = s.top_recommendations.map(r => {
+      const bg = r.action === 'BUY_NOW' ? '#047857' : r.action === 'CONDITIONAL_BUY' ? '#2563eb' : r.action === 'STARTER_POSITION' ? '#7c3aed' : '#6b7280';
+      return `<div style="padding:6px 10px;background:var(--bg-3, #2a2a35);border-radius:6px;margin-top:6px;font-size:12px;">
+        <b style="color:${bg}">${r.action}</b> [${r.score}점] <b>${r.name}</b> (${r.code}) 비중: ${r.size}%<br>
+        <span style="color:var(--text-2)">사유:</span> ${r.reason}<br>
+        <span style="color:var(--text-3)">트리거:</span> ${r.trigger}
+      </div>`;
+    }).join('');
+
+    html += `<div class="market-regime-strip" style="margin-top:8px;">
+      <div><b>💡 Top 추천 (Recommendation Layer)</b></div>
+      ${recHtml}
+    </div>`;
+  }
+
+  return html;
 }
 
 function renderOperationReport(report) {
