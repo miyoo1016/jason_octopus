@@ -212,7 +212,7 @@ def test_js_report_generator_output():
 
     # 실제 JS 템플릿 및 대체 텍스트(fallback)에 해당 필드들이 삽입되었는지 문자열 검색으로 회귀 확인
     assert "추천: ${recAction} | 순위 ${recRank} | 점수 ${recScore} | 권장비중 ${recSize}%" in content, "추천 필드 누락"
-    assert "추천 사유: ${recReason}" in content, "추천 사유 누락"
+    assert "추천 사유: ${finalRecReason}" in content, "추천 사유 누락"
     assert "진입 트리거: ${recTrigger}" in content, "진입 트리거 누락"
     assert "무효화 조건: ${recInvalidation}" in content, "무효화 조건 누락"
     assert "BUY_NOW 없음. 조건부/소액탐색 후보만 존재" in content, "BUY_NOW 부재 경고 누락"
@@ -224,6 +224,13 @@ def test_js_report_generator_output():
     assert "매수 대상 아님. RS/VCP/이평선/수급 조건 재충족 시 재평가" in content, "AVOID 진입 금지 문구 누락"
     assert "회피 유지. 복합 약점 해소 전까지 진입 금지" in content, "AVOID 무효화 문구 누락"
     assert "? 0 : recScoreRaw" in content, "점수 0 Fallback 누락"
+
+    # RS별 세부 보정 문구 확인
+    assert "RS는 강하지만 역수축/변동성 확장으로 추격 매수 금지" in content, "RS>=80 REVERSE_EXPANSION 누락"
+    assert "역수축/변동성 확장 + RS 80 미달로 진입 보류" in content, "RS<80 REVERSE_EXPANSION 누락"
+    assert "일부 강점은 있으나 RS 80 미달로 진입 보류" in content, "RS<80 일반 WATCH_ONLY 누락"
+    assert "RS 80 회복 + VCP 재형성" in content, "RS<80 진입 트리거 누락"
+    assert "RS 60 이탈" in content, "RS<80 무효화 조건 보정(60 이탈) 누락"
 
     print("✅ test_js_report_generator_output passed")
 

@@ -91,9 +91,38 @@
         let recTrigger = row.entry_trigger || row.entryTrigger || '';
         let recInvalidation = row.invalidation_condition || row.invalidationCondition || '';
 
+        let finalRecReason = recReason;
         if (recAction === 'WATCH_ONLY') {
-            if (!recTrigger) recTrigger = 'VCP 재형성 + 돌파 거래량 확인 전까지 진입 금지';
-            if (!recInvalidation) recInvalidation = 'RS 80 이탈, 이평선 비정렬 지속, 변동성 확장 지속';
+            const isReverse = row.vcp_status === 'REVERSE_EXPANSION';
+            const rs = row.rs_rating != null ? row.rs_rating : (row.rs_percentile || 0);
+            const isRSLow = rs < 80;
+            const isVcpLow = (row.vcp_score != null ? row.vcp_score : (row.vcp_display_score || 0)) < 45;
+
+            let needsOverride = false;
+            if (finalRecReason.includes('RS는 강하지만') && isRSLow) {
+                needsOverride = true;
+            }
+
+            if (isReverse && !isRSLow) {
+                if (!finalRecReason || needsOverride) finalRecReason = 'RS는 강하지만 역수축/변동성 확장으로 추격 매수 금지';
+                if (!recTrigger) recTrigger = 'VCP 재형성 + 돌파 거래량 확인 전까지 진입 금지';
+                if (!recInvalidation) recInvalidation = 'RS 80 이탈, 이평선 비정렬 지속, 변동성 확장 지속';
+            } else if (isReverse && isRSLow) {
+                if (!finalRecReason || needsOverride) finalRecReason = '역수축/변동성 확장 + RS 80 미달로 진입 보류';
+                if (!recTrigger) recTrigger = 'RS 80 회복 + VCP 재형성 + 돌파 거래량 확인 전까지 진입 금지';
+                if (!recInvalidation) recInvalidation = 'RS 60 이탈, 이평선 비정렬, 변동성 확장 지속 시 관심도 하향';
+            } else if (isRSLow) {
+                if (!finalRecReason || needsOverride) finalRecReason = '일부 강점은 있으나 RS 80 미달로 진입 보류';
+                if (!recTrigger) recTrigger = 'RS 80 회복 + VCP 재형성 + 돌파 거래량 확인 전까지 진입 금지';
+                if (!recInvalidation) recInvalidation = 'RS 60 이탈, 이평선 비정렬, 박스 하단 이탈 시 관심도 하향';
+            } else if (isVcpLow) {
+                if (!finalRecReason || needsOverride) finalRecReason = 'VCP 수축 미완성으로 진입 보류';
+                if (!recTrigger) recTrigger = 'VCP 재형성 + 돌파 거래량 확인 전까지 진입 금지';
+                if (!recInvalidation) recInvalidation = 'RS 80 이탈, 이평선 비정렬 지속, 변동성 확장 지속';
+            } else {
+                if (!recTrigger) recTrigger = 'VCP 재형성 + 돌파 거래량 확인 전까지 진입 금지';
+                if (!recInvalidation) recInvalidation = 'RS 80 이탈, 이평선 비정렬 지속, 변동성 확장 지속';
+            }
         } else if (recAction === 'AVOID') {
             if (!recTrigger) recTrigger = '매수 대상 아님. RS/VCP/이평선/수급 조건 재충족 시 재평가';
             if (!recInvalidation) recInvalidation = '회피 유지. 복합 약점 해소 전까지 진입 금지';
@@ -114,7 +143,7 @@
           `   - 지표: RS ${row.rs_rating || 0}, VCP ${row.vcp_score || 0}, 수급 ${flowText}`,
           `   - VCP 진단: ${row.vcp_diagnostic || row.vcp_quality_reason || row.vcpQualityReason || `raw ${row.vcp_raw_score ?? '-'} → effective ${row.vcp_effective_score ?? '-'} → display ${row.vcp_display_score ?? row.vcp_score ?? '-'}`}`,
           `   - 추천: ${recAction} | 순위 ${recRank} | 점수 ${recScore} | 권장비중 ${recSize}%`,
-          `   - 추천 사유: ${recReason}`,
+          `   - 추천 사유: ${finalRecReason}`,
           `   - 진입 트리거: ${recTrigger}`,
           `   - 무효화 조건: ${recInvalidation}`,
           `   - 유동성: ${row.liquidity_status || '-'} (${typeof formatCap === 'function' ? formatCap(row.liquidity_trading_value) : (row.liquidity_trading_value || '-')})`,
